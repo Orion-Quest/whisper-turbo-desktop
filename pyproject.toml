@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "whisper-turbo-desktop"
+version = "0.1.0"
+description = "Windows desktop GUI skeleton for local Whisper transcription and translation"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "PySide6>=6.8,<7",
+  "openai-whisper>=20250625",
+]
+
+[project.scripts]
+whisper-turbo-desktop = "whisper_turbo_desktop.app:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
