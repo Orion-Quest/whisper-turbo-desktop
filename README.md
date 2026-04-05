@@ -105,7 +105,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
 Recommended README download link pattern after you publish a release:
 
 ```markdown
-[Download Windows Portable Build](https://github.com/<OWNER>/<REPO>/releases/latest)
+[Open Latest Release](https://github.com/Orion-Quest/whisper-turbo-desktop/releases/latest)
 ```
 
 Important:
@@ -116,6 +116,8 @@ Important:
   - external object storage/CDN for the portable folder or archive
   - a bootstrap installer that downloads the payload during setup
   - a multi-part installer/release strategy
+- Current public release page:
+  - `https://github.com/Orion-Quest/whisper-turbo-desktop/releases/latest`
 
 The build script resolves these bundled assets automatically:
 
