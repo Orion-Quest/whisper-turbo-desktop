@@ -5,7 +5,7 @@
 #define MyAppName "Whisper Turbo Desktop"
 #define MyAppVersion "0.1.0"
 #define MyAppPublisher "mc_leafwave"
-#define MyAppURL "https://github.com/<OWNER>/<REPO>"
+#define MyAppURL "https://github.com/Orion-Quest/whisper-turbo-desktop"
 #define MyAppExeName "WhisperTurboDesktop.exe"
 #define MyAppId "{{D8D2A5A8-6E0B-4D78-A9A7-5D44F4E4E9A1}}"
 #define MySourceDir "..\\release\\WhisperTurboDesktop-windows-x64-portable"
