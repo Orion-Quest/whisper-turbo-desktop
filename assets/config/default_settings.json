@@ -1,0 +1,9 @@
+{
+  "python_executable": "",
+  "default_output_dir": "",
+  "default_model": "turbo",
+  "default_output_language": "Original",
+  "default_source_language": "",
+  "default_device": "auto",
+  "default_output_format": "srt"
+}
