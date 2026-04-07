@@ -1,33 +1,45 @@
 # Windows Build Notes
 
-This project uses PyInstaller to build a Windows desktop bundle with the Whisper `turbo` model and a bundled `ffmpeg.exe`.
+This project now builds a bootstrap-based Windows release.
 
 ## Commands
 
 ```powershell
-python -m pip install -r requirements-build.txt
+$env:WTD_PYTHON='E:\Users\mc_leafwave\anaconda3\envs\my_11\python.exe'
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
 ```
 
+Optional environment overrides:
+
+- `WTD_PYTHON`
+- `WTD_FFMPEG_PATH`
+- `WTD_RELEASE_REPO`
+- `WTD_ISCC`
+
 ## Output
 
-- Default bundle output: `dist/WhisperTurboDesktop`
-- Intermediate build files: `build/`
-- Portable release folder: `release/WhisperTurboDesktop-windows-x64-portable`
+- `dist/WhisperTurboDesktop`
+  - heavy runtime bundle
+- `dist/WhisperTurboBootstrap`
+  - bootstrap launcher build
+- `release/`
+  - runtime ZIP or runtime parts
+  - `ffmpeg` ZIP
+  - bootstrap launcher folder
+  - release manifest
+  - SHA256 checksums
+  - optional Inno Setup installer
 
 ## Current Strategy
 
-- Use `main.py` as the GUI entrypoint
-- Add `src/` to `pathex`
-- Collect Whisper, Tiktoken, and Torch runtime assets
-- Collect `large-v3-turbo.pt` into `models/`
-- Collect `ffmpeg.exe` into `bin/`
-- Collect default config and fallback font assets
-- Produce a windowed directory-style bundle instead of one-file mode
+- Use `main.py` as the runtime GUI entrypoint
+- Use `bootstrap_main.py` as the bootstrap entrypoint
+- Bundle neither Whisper model nor `ffmpeg` inside the runtime release
+- Download runtime payload and `ffmpeg` on first bootstrap launch
+- Download Whisper model on first real transcription
 
 ## Notes
 
-- Torch makes the bundle large
-- The build script fails fast if it cannot find the bundled model or `ffmpeg.exe`
-- The final portable payload can exceed GitHub's practical single-asset size
-- For a polished installer, add a second step with Inno Setup or another installer tool
+- GitHub Releases remains the single public hosting surface
+- If the runtime ZIP exceeds GitHub single-asset limits, the build script splits it into ordered parts
+- The installer packages only the bootstrap launcher and release manifest
