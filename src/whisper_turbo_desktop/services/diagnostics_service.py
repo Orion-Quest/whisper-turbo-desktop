@@ -3,7 +3,11 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 
-from whisper_turbo_desktop.utils.runtime import bundled_ffmpeg_path
+from whisper_turbo_desktop.utils.runtime import (
+    is_model_cached,
+    local_model_cache_path,
+    managed_ffmpeg_path,
+)
 
 
 @dataclass(slots=True)
@@ -20,23 +24,24 @@ class DiagnosticsService:
             self._check_ffmpeg(),
             self._check_whisper(python_executable),
             self._check_torch_cuda(python_executable),
+            self._check_model_cache("turbo"),
         ]
 
     def _check_python(self, python_executable: str) -> DiagnosticItem:
         return self._run([python_executable, "--version"], "Python")
 
     def _check_ffmpeg(self) -> DiagnosticItem:
-        ffmpeg_path = bundled_ffmpeg_path()
-        command = [str(ffmpeg_path), "-version"] if ffmpeg_path.exists() else ["ffmpeg", "-version"]
-        return self._run(command, "FFmpeg")
+        managed = managed_ffmpeg_path()
+        if managed.exists():
+            result = self._run([str(managed), "-version"], "FFmpeg")
+            if result.ok:
+                result.details = f"{result.details}\nmanaged_path={managed}"
+            return result
+        return self._run(["ffmpeg", "-version"], "FFmpeg")
 
     def _check_whisper(self, python_executable: str) -> DiagnosticItem:
         return self._run(
-            [
-                python_executable,
-                "-c",
-                "import whisper; print(whisper.__version__)",
-            ],
+            [python_executable, "-c", "import whisper; print(whisper.__version__)"],
             "Whisper",
         )
 
@@ -45,12 +50,23 @@ class DiagnosticsService:
             [
                 python_executable,
                 "-c",
-                (
-                    "import torch; "
-                    "print(f'torch={torch.__version__}; cuda={torch.cuda.is_available()}')"
-                ),
+                "import torch; print(f'torch={torch.__version__}; cuda={torch.cuda.is_available()}')",
             ],
             "Torch/CUDA",
+        )
+
+    def _check_model_cache(self, model_name: str) -> DiagnosticItem:
+        cache_path = local_model_cache_path(model_name)
+        if is_model_cached(model_name):
+            return DiagnosticItem(
+                name="Model Cache",
+                ok=True,
+                details=f"{model_name} already cached at {cache_path}",
+            )
+        return DiagnosticItem(
+            name="Model Cache",
+            ok=True,
+            details=f"{model_name} not cached yet; it will be downloaded on first transcription to {cache_path}",
         )
 
     def _run(self, command: list[str], name: str) -> DiagnosticItem:
@@ -72,5 +88,5 @@ class DiagnosticsService:
         return DiagnosticItem(
             name=name,
             ok=False,
-            details=output or f"{name} 检查失败，退出码: {completed.returncode}",
+            details=output or f"{name} check failed, exit code: {completed.returncode}",
         )
