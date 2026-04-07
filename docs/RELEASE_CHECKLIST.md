@@ -2,30 +2,44 @@
 
 ## Before Build
 
-- Confirm the app launches with `python main.py`
-- Confirm `large-v3-turbo.pt` exists under `%USERPROFILE%\.cache\whisper` or set `WTD_MODEL_PATH`
-- Confirm `ffmpeg.exe` can be resolved or set `WTD_FFMPEG_PATH`
+- Confirm the runtime app launches with `python main.py`
 - Confirm queue and history interactions still work
+- Confirm `ffmpeg.exe` is available locally for packaging input
 
 ## Build
 
 - Install build dependencies from `requirements-build.txt`
 - Run `scripts/build_windows.ps1`
-- Verify the output exists under `dist/WhisperTurboDesktop`
-- Verify `release/WhisperTurboDesktop-windows-x64-portable` exists
+- Verify:
+  - `release/release-manifest-<version>.json`
+  - runtime ZIP or runtime parts
+  - `ffmpeg` ZIP
+  - bootstrap launcher folder
+  - `SHA256SUMS.txt`
+- If Inno Setup is installed, verify the bootstrap installer exists under `release/installer`
 
-## Smoke Test
+## Bootstrap Smoke Test
 
-- Launch the packaged executable
+- Run the packaged bootstrap launcher on a clean machine or clean user profile
+- Confirm it downloads the runtime payload
+- Confirm it downloads the `ffmpeg` payload
+- Confirm it verifies checksums before extraction
+- Confirm it starts the runtime app after installation
+
+## Runtime Smoke Test
+
 - Run one single-file transcription
+- Confirm the model downloads automatically if it is not already cached
 - Queue at least two files and start the queue
 - Double-click one history record and one output file
 - Confirm output files are written to the configured output folder
-- Confirm bundled `ffmpeg.exe` and bundled model are present inside the release folder
 
 ## Ship
 
-- Attach the packaged folder or ZIP
-- Include build instructions and runtime prerequisites
-- Note that the release includes a bundled model and bundled `ffmpeg.exe`
-- If the portable ZIP is larger than your release target allows, publish the folder through external storage or use an installer/bootstrap strategy
+- Upload the bootstrap installer
+- Upload runtime ZIP or runtime parts
+- Upload `ffmpeg` ZIP
+- Upload release manifest and checksums
+- Release notes must clearly state:
+  - bootstrap downloads runtime and `ffmpeg` on first launch
+  - Whisper downloads the model on first transcription
