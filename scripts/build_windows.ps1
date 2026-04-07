@@ -50,6 +50,10 @@ function Resolve-CondaTkDllPath([string]$pythonPath, [string]$dllName) {
     return (Resolve-Path $candidate).Path
 }
 
+function Resolve-CondaBinDllPath([string]$pythonPath, [string]$dllName) {
+    return Resolve-CondaTkDllPath $pythonPath $dllName
+}
+
 function Resolve-IsccPath {
     if ($env:WTD_ISCC -and (Test-Path $env:WTD_ISCC)) {
         return (Resolve-Path $env:WTD_ISCC).Path
@@ -262,8 +266,10 @@ if ($LASTEXITCODE -ne 0) {
 $bootstrapInternal = Join-Path $bootstrapDist "_internal"
 $tclDll = Resolve-CondaTkDllPath $pythonExe "tcl86t.dll"
 $tkDll = Resolve-CondaTkDllPath $pythonExe "tk86t.dll"
+$zlib1Dll = Resolve-CondaBinDllPath $pythonExe "zlib1.dll"
 Copy-Item $tclDll (Join-Path $bootstrapInternal "tcl86t.dll") -Force
 Copy-Item $tkDll (Join-Path $bootstrapInternal "tk86t.dll") -Force
+Copy-Item $zlib1Dll (Join-Path $bootstrapInternal "zlib1.dll") -Force
 
 $bootstrapExeSource = Join-Path $bootstrapDist "WhisperTurboDesktop.exe"
 Copy-Item -Path "$bootstrapDist\*" -Destination $bootstrapReleaseDir -Recurse -Force
