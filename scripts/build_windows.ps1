@@ -40,6 +40,16 @@ function Resolve-FfmpegPath {
     throw "ffmpeg.exe not found. Install ffmpeg or set WTD_FFMPEG_PATH."
 }
 
+function Resolve-CondaTkDllPath([string]$pythonPath, [string]$dllName) {
+    $pythonResolved = (Resolve-Path $pythonPath).Path
+    $envRoot = Split-Path -Parent $pythonResolved
+    $candidate = Join-Path $envRoot "Library\\bin\\$dllName"
+    if (-not (Test-Path $candidate)) {
+        throw "$dllName not found next to the selected Python env: $candidate"
+    }
+    return (Resolve-Path $candidate).Path
+}
+
 function Resolve-IsccPath {
     if ($env:WTD_ISCC -and (Test-Path $env:WTD_ISCC)) {
         return (Resolve-Path $env:WTD_ISCC).Path
@@ -248,6 +258,12 @@ Write-Host "Building bootstrap launcher..."
 if ($LASTEXITCODE -ne 0) {
     throw "Bootstrap PyInstaller build failed with exit code $LASTEXITCODE"
 }
+
+$bootstrapInternal = Join-Path $bootstrapDist "_internal"
+$tclDll = Resolve-CondaTkDllPath $pythonExe "tcl86t.dll"
+$tkDll = Resolve-CondaTkDllPath $pythonExe "tk86t.dll"
+Copy-Item $tclDll (Join-Path $bootstrapInternal "tcl86t.dll") -Force
+Copy-Item $tkDll (Join-Path $bootstrapInternal "tk86t.dll") -Force
 
 $bootstrapExeSource = Join-Path $bootstrapDist "WhisperTurboDesktop.exe"
 Copy-Item -Path "$bootstrapDist\*" -Destination $bootstrapReleaseDir -Recurse -Force
