@@ -4,38 +4,37 @@ Windows desktop app for local Whisper transcription and English translation.
 
 ### Release Assets
 
-- `WhisperTurboDesktop-Setup-{{VERSION}}.exe`
-  - Inno Setup installer
+- `WhisperTurboDesktop-Bootstrap-Setup-{{VERSION}}.exe`
+  - small installer
   - recommended for end users
-- `WhisperTurboDesktop-windows-x64-portable`
-  - unpacked portable build
-  - useful for internal deployment or manual packaging
+- `WhisperTurboDesktop-runtime-{{VERSION}}.zip`
+  - or split runtime parts if the archive exceeds GitHub single-asset limits
+- `ffmpeg-windows-x64-<version>.zip`
+  - managed ffmpeg payload downloaded by the bootstrap launcher
+- `release-manifest-{{VERSION}}.json`
+  - runtime metadata used by the bootstrap launcher
 - `SHA256SUMS.txt`
-  - checksums for published files
+  - checksums for all published files
 
-### What's Included
+### Runtime Model
 
-- bundled Whisper `turbo` model
-- bundled `ffmpeg.exe`
-- bundled Python runtime and required libraries
-- bundled default config and fallback font
+- On first launch, the bootstrap launcher downloads:
+  - the runtime payload
+  - the managed `ffmpeg` payload
+- On first actual transcription, Whisper downloads the `turbo` model if it is not already cached
 
 ### Installation
 
-1. Download `WhisperTurboDesktop-Setup-{{VERSION}}.exe`
+1. Download `WhisperTurboDesktop-Bootstrap-Setup-{{VERSION}}.exe`
 2. Run the installer
-3. Launch `Whisper Turbo Desktop` from the Start Menu or desktop shortcut
+3. Launch `Whisper Turbo Desktop`
+4. On first launch, wait for the bootstrap launcher to download the runtime package and `ffmpeg`
 
 ### First Run Notes
 
 - `Output Language = Original` keeps the spoken language
 - `Output Language = English (Translate)` outputs English text
-- GPU is used when available; CPU fallback remains available
-
-### Upgrade Notes
-
-- uninstalling the app does not remove user data under `%APPDATA%\WhisperTurboDesktop`
-- if you are upgrading from an older build, close the app before installation
+- The first transcription may still require network access if the Whisper model is not cached
 
 ### Checksums
 
@@ -45,6 +44,5 @@ Windows desktop app for local Whisper transcription and English translation.
 
 ### Known Issues
 
-- the full payload is large because the Whisper model is bundled
-- translation output is limited to English in the current release
-
+- The runtime payload is still large because it includes Torch and the packaged runtime
+- If the runtime ZIP exceeds GitHub single-asset limits, publish the generated part files together
