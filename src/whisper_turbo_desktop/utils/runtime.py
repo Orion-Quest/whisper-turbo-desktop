@@ -4,9 +4,11 @@ import os
 import sys
 from pathlib import Path
 
-BUNDLED_MODEL_FILES = {
+MODEL_CACHE_FILENAMES = {
     "turbo": "large-v3-turbo.pt",
 }
+
+APP_DIR_NAME = "WhisperTurboDesktop"
 
 
 def project_root() -> Path:
@@ -29,21 +31,10 @@ def runtime_app_dir() -> Path:
     return project_root()
 
 
-def bundled_bin_dir() -> Path:
-    return runtime_data_dir() / "bin"
-
-
-def bundled_ffmpeg_path() -> Path:
-    return bundled_bin_dir() / "ffmpeg.exe"
-
-
-def bundled_model_dir() -> Path:
-    return runtime_data_dir() / "models"
-
-
-def bundled_model_path(model_name: str) -> Path:
-    filename = BUNDLED_MODEL_FILES[model_name]
-    return bundled_model_dir() / filename
+def install_root_dir() -> Path:
+    if is_frozen() and runtime_app_dir().name.lower() == "runtime":
+        return runtime_app_dir().parent
+    return runtime_app_dir()
 
 
 def bundled_config_dir() -> Path:
@@ -58,25 +49,34 @@ def local_whisper_cache_dir() -> Path:
     return Path.home() / ".cache" / "whisper"
 
 
+def local_model_cache_path(model_name: str) -> Path:
+    return local_whisper_cache_dir() / MODEL_CACHE_FILENAMES[model_name]
+
+
+def is_model_cached(model_name: str) -> bool:
+    return local_model_cache_path(model_name).exists()
+
+
 def resolve_model_source(model_name: str) -> str:
-    bundled = bundled_model_path(model_name)
-    if bundled.exists():
-        return str(bundled)
-
-    cache_fallback = local_whisper_cache_dir() / BUNDLED_MODEL_FILES[model_name]
-    if cache_fallback.exists():
-        return str(cache_fallback)
-
+    cache_path = local_model_cache_path(model_name)
+    if cache_path.exists():
+        return str(cache_path)
     return model_name
 
 
+def managed_ffmpeg_path() -> Path:
+    return install_root_dir() / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe"
+
+
+def installed_manifest_path() -> Path:
+    return install_root_dir() / "installed_manifest.json"
+
+
 def ensure_runtime_environment() -> None:
-    bin_dir = bundled_bin_dir()
-    if not bin_dir.exists():
-        return
-
     current_path = os.environ.get("PATH", "")
-    if str(bin_dir) in current_path.split(os.pathsep):
-        return
-
-    os.environ["PATH"] = str(bin_dir) + os.pathsep + current_path
+    ffmpeg_path = managed_ffmpeg_path()
+    if ffmpeg_path.exists():
+        ffmpeg_dir = str(ffmpeg_path.parent)
+        path_parts = current_path.split(os.pathsep) if current_path else []
+        if ffmpeg_dir not in path_parts:
+            os.environ["PATH"] = ffmpeg_dir + os.pathsep + current_path if current_path else ffmpeg_dir
