@@ -12,6 +12,25 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def _configure_tcl_runtime() -> None:
+    if not getattr(sys, "frozen", False):
+        return
+
+    app_dir = Path(sys.executable).resolve().parent
+    internal_dir = app_dir / "_internal"
+    tcl_dir = internal_dir / "_tcl_data"
+    tk_dir = internal_dir / "_tk_data"
+
+    if tcl_dir.exists():
+        os.environ["TCL_LIBRARY"] = str(tcl_dir)
+    if tk_dir.exists():
+        os.environ["TK_LIBRARY"] = str(tk_dir)
+
+
+_configure_tcl_runtime()
+
 from tkinter import Tk, messagebox, ttk
 
 
