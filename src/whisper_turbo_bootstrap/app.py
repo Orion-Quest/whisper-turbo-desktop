@@ -22,6 +22,16 @@ def _configure_tcl_runtime() -> None:
     internal_dir = app_dir / "_internal"
     tcl_dir = internal_dir / "_tcl_data"
     tk_dir = internal_dir / "_tk_data"
+    internal_dir_str = str(internal_dir)
+
+    if internal_dir.exists():
+        current_path = os.environ.get("PATH", "")
+        path_parts = current_path.split(os.pathsep) if current_path else []
+        if internal_dir_str not in path_parts:
+            os.environ["PATH"] = internal_dir_str + os.pathsep + current_path if current_path else internal_dir_str
+
+        if hasattr(os, "add_dll_directory"):
+            os.add_dll_directory(internal_dir_str)
 
     if tcl_dir.exists():
         os.environ["TCL_LIBRARY"] = str(tcl_dir)
