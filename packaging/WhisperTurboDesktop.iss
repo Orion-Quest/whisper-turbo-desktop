@@ -55,8 +55,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Files]
-Source: "{#MySourceDir}\{#MyBootstrapExe}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#MySourceDir}\{#MyManifestName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Dirs]
 Name: "{userappdata}\WhisperTurboDesktop"; Permissions: users-modify
