@@ -2,183 +2,67 @@
 
 ## Goal
 
-Provide a small Windows installer that users can download from GitHub Releases and run directly. The installer should:
+Provide a small Windows installer that places only a bootstrap launcher on disk.
 
-- detect the local system and available disk space
-- download the full portable payload or payload parts from a remote source
-- verify integrity before install
-- unpack the app into the chosen install directory
-- create shortcuts and uninstall metadata
-- support update checks and payload replacement without requiring the user to handle large archives manually
+On first launch, the bootstrap launcher downloads:
 
-This is the practical delivery path when the full portable build is too large for a single GitHub release asset.
+- the runtime package
+- the `ffmpeg` package
 
-## Recommended Use Cases
+Then, on first actual transcription, Whisper downloads the model if it is not already cached.
 
-- the bundled model and runtime make the full payload several GB
-- the project needs a simple "Download -> Run Installer -> Launch App" experience
-- you want to keep GitHub Releases as the public control plane, but host large payload files elsewhere
-- you want future updates to reuse the same installer and manifest format
+## Public Release Assets
 
-## Distribution Model
+GitHub Releases is the single public hosting surface.
 
-### Public Artifacts
+Per release, publish:
 
-- GitHub Releases:
-  - `WhisperTurboDesktop-Bootstrap-Setup.exe`
-  - release notes
-  - checksums for installer and payload manifest
-- external storage or CDN:
-  - `WhisperTurboDesktop-windows-x64-portable.7z.001`
-  - `WhisperTurboDesktop-windows-x64-portable.7z.002`
-  - additional parts as needed
-  - optional full folder archive for internal distribution
-- manifest file:
-  - `manifest.json`
-  - contains version, file list, sizes, checksums, release channel, minimum disk space
+- `WhisperTurboDesktop-Bootstrap-Setup-<version>.exe`
+- `WhisperTurboDesktop-runtime-<version>.zip`
+  - or split parts if needed
+- `ffmpeg-windows-x64-<version>.zip`
+- `release-manifest-<version>.json`
+- `SHA256SUMS.txt`
 
-## Core Flow
+## Bootstrap Responsibilities
 
-1. User downloads `WhisperTurboDesktop-Bootstrap-Setup.exe` from GitHub Releases.
-2. Bootstrap installer starts and shows:
-   - product name
-   - target version
-   - install path
-   - required disk space
-3. Installer downloads `manifest.json`.
-4. Installer validates:
-   - OS version
-   - architecture
-   - available disk space
-   - write permissions for install directory
-5. Installer downloads payload files from CDN/object storage.
-6. Installer verifies checksums for every downloaded part.
-7. Installer extracts payload to install directory.
-8. Installer writes:
-   - app files
-   - uninstall entry
-   - desktop shortcut
-   - start menu shortcut
-9. Installer optionally launches the app.
+- read the bundled release manifest
+- detect whether the correct runtime version is already installed
+- detect whether managed `ffmpeg` is already installed
+- download missing assets from GitHub Releases
+- verify SHA256 checksums
+- extract runtime and `ffmpeg` into the managed install root
+- write `installed_manifest.json`
+- launch the runtime app
 
-## Update Flow
+## Install Layout
 
-1. App checks a lightweight update manifest URL on startup or through "Check for Updates".
-2. If a newer version exists:
-   - prompt user
-   - download only the new payload package
-   - stage replacement
-   - close app
-   - replace files
-   - relaunch
-3. Keep rollback strategy:
-   - backup previous install folder
-   - if replacement fails, restore previous version
+- install root:
+  - `%LOCALAPPDATA%\\Programs\\WhisperTurboDesktop`
+- bootstrap exe:
+  - `%LOCALAPPDATA%\\Programs\\WhisperTurboDesktop\\WhisperTurboDesktop.exe`
+- runtime app:
+  - `%LOCALAPPDATA%\\Programs\\WhisperTurboDesktop\\runtime\\WhisperTurboDesktop.exe`
+- managed `ffmpeg`:
+  - `%LOCALAPPDATA%\\Programs\\WhisperTurboDesktop\\tools\\ffmpeg\\bin\\ffmpeg.exe`
+- model cache:
+  - `%USERPROFILE%\\.cache\\whisper`
 
-## Component Structure
-
-```text
-bootstrap/
-  installer/
-    WhisperTurboDesktop-Bootstrap.iss
-  payload/
-    manifest.json
-    checksums.txt
-    WhisperTurboDesktop-windows-x64-portable.7z.001
-    WhisperTurboDesktop-windows-x64-portable.7z.002
-  docs/
-    INSTALL.md
-```
-
-## Manifest Example
-
-```json
-{
-  "app_id": "WhisperTurboDesktop",
-  "version": "v0.1.0",
-  "channel": "stable",
-  "platform": "windows-x64",
-  "min_disk_space_gb": 12,
-  "entry_exe": "WhisperTurboDesktop.exe",
-  "payload_parts": [
-    {
-      "name": "WhisperTurboDesktop-windows-x64-portable.7z.001",
-      "url": "https://downloads.example.com/WhisperTurboDesktop/v0.1.0/WhisperTurboDesktop-windows-x64-portable.7z.001",
-      "sha256": "<replace-me>",
-      "size": 2147483648
-    },
-    {
-      "name": "WhisperTurboDesktop-windows-x64-portable.7z.002",
-      "url": "https://downloads.example.com/WhisperTurboDesktop/v0.1.0/WhisperTurboDesktop-windows-x64-portable.7z.002",
-      "sha256": "<replace-me>",
-      "size": 2147483648
-    }
-  ]
-}
-```
-
-## Installation Strategy
-
-- preferred installer engine: `Inno Setup`
-- payload extraction helper:
-  - embed `7za.exe` or another extraction tool
-  - or ship a self-extracting payload
-- install root default:
-  - `{autopf}\WhisperTurboDesktop`
-- user data stays outside install folder:
-  - `%APPDATA%\WhisperTurboDesktop`
-
-## Dependency Handling
-
-- Python runtime:
-  - already bundled in the portable payload
-- Whisper model:
-  - bundled inside payload
-- `ffmpeg.exe`:
-  - bundled inside payload
-- GPU runtime:
-  - rely on system NVIDIA driver and compatible CUDA support
-  - if unavailable, app falls back to CPU
-- fonts and config:
-  - bundled inside payload
-
-## Error Handling
+## Failure Handling
 
 - network failure:
-  - show retry dialog
-  - allow resume if partial parts exist
+  - fail fast with a clear error dialog
 - checksum mismatch:
-  - delete corrupted part
-  - redownload only failed part
+  - delete the downloaded file and abort
 - insufficient disk space:
-  - block install with exact required amount
+  - block installation before download starts
 - extraction failure:
-  - keep temp files for diagnostics
-  - allow cleanup and retry
+  - leave the old installation intact and abort
 
 ## Release Workflow
 
-1. Build portable payload locally.
-2. Split or archive payload for remote hosting.
-3. Generate SHA256 checksums.
-4. Upload payload parts to CDN/object storage.
-5. Publish bootstrap installer to GitHub Releases.
-6. Publish release notes with:
-   - bootstrap installer link
-   - payload version
-   - checksum file
-   - known issues
-
-## Practical Recommendation
-
-For this project, use:
-
-- GitHub Releases for:
-  - bootstrap installer
-  - release notes
-  - checksums
-- external storage for:
-  - full payload archive or archive parts
-
-This gives you a user-facing "one click installer" while avoiding GitHub asset size constraints.
-
+1. Build runtime payload.
+2. Build bootstrap launcher.
+3. Generate manifest and checksums.
+4. Optionally compile the Inno Setup installer.
+5. Upload assets to GitHub Releases under a version tag.
