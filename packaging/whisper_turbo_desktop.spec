@@ -1,6 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-import os
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
@@ -11,27 +10,30 @@ entry_script = project_root / "main.py"
 assets_root = project_root / "assets"
 icon_path = assets_root / "app.ico"
 
-model_path = Path(os.environ["WTD_MODEL_PATH"])
-ffmpeg_path = Path(os.environ["WTD_FFMPEG_PATH"])
-
 datas = []
 datas += collect_data_files("whisper")
 datas += collect_data_files("tiktoken")
 datas += [
     (str(assets_root / "config" / "default_settings.json"), "config"),
     (str(assets_root / "fonts" / "DejaVuSans.ttf"), "fonts"),
-    (str(model_path), "models"),
 ]
 
 binaries = []
 binaries += collect_dynamic_libs("torch")
-binaries += [
-    (str(ffmpeg_path), "bin"),
-]
 
 hiddenimports = []
 hiddenimports += collect_submodules("whisper")
 hiddenimports += collect_submodules("tiktoken")
+
+excludes = [
+    "IPython",
+    "matplotlib",
+    "onnxruntime",
+    "pandas",
+    "pytest",
+    "tensorflow",
+    "torchvision",
+]
 
 a = Analysis(
     [str(entry_script)],
@@ -42,7 +44,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=excludes,
     noarchive=False,
 )
 
