@@ -1,16 +1,22 @@
-; Whisper Turbo Desktop
-; Inno Setup script template
-; Replace the marked values before production use.
+; Whisper Turbo Desktop bootstrap installer
+
+#ifndef MyAppVersion
+  #define MyAppVersion "0.2.0"
+#endif
+#ifndef MySourceDir
+  #define MySourceDir "..\release\bootstrap"
+#endif
+#ifndef MyOutputDir
+  #define MyOutputDir "..\release\installer"
+#endif
 
 #define MyAppName "Whisper Turbo Desktop"
-#define MyAppVersion "0.1.0"
 #define MyAppPublisher "mc_leafwave"
 #define MyAppURL "https://github.com/Orion-Quest/whisper-turbo-desktop"
-#define MyAppExeName "WhisperTurboDesktop.exe"
+#define MyBootstrapExe "WhisperTurboDesktop.exe"
+#define MyManifestName "release-manifest.json"
 #define MyAppId "{{D8D2A5A8-6E0B-4D78-A9A7-5D44F4E4E9A1}}"
-#define MySourceDir "..\\release\\WhisperTurboDesktop-windows-x64-portable"
-#define MyOutputDir "..\\release\\installer"
-#define MyIconFile "..\\assets\\app.ico"
+#define MyIconFile "..\assets\app.ico"
 
 [Setup]
 AppId={#MyAppId}
@@ -20,19 +26,19 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={autopf}\{#MyAppName}
+DefaultDirName={localappdata}\Programs\WhisperTurboDesktop
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
-PrivilegesRequired=admin
+PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir={#MyOutputDir}
-OutputBaseFilename=WhisperTurboDesktop-Setup-{#MyAppVersion}
+OutputBaseFilename=WhisperTurboDesktop-Bootstrap-Setup-{#MyAppVersion}
 SetupIconFile={#MyIconFile}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayIcon={app}\{#MyBootstrapExe}
 ChangesAssociations=no
 CloseApplications=yes
 RestartApplications=no
@@ -40,28 +46,27 @@ UsePreviousAppDir=yes
 UsePreviousLanguage=yes
 UsePreviousTasks=yes
 MinVersion=10.0
-ExtraDiskSpaceRequired=12884901888
+ExtraDiskSpaceRequired=104857600
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
-Name: "quicklaunchicon"; Description: "Create a Quick Launch shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 
 [Files]
-Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#MySourceDir}\{#MyBootstrapExe}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#MySourceDir}\{#MyManifestName}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Dirs]
 Name: "{userappdata}\WhisperTurboDesktop"; Permissions: users-modify
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
-Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: quicklaunchicon
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyBootstrapExe}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyBootstrapExe}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyBootstrapExe}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
