@@ -7,14 +7,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import urllib.error
-import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+_DLL_DIRECTORY_HANDLES = []
 
-def _configure_tcl_runtime() -> None:
+
+def _configure_bootstrap_runtime() -> None:
     if not getattr(sys, "frozen", False):
         return
 
@@ -31,7 +31,7 @@ def _configure_tcl_runtime() -> None:
             os.environ["PATH"] = internal_dir_str + os.pathsep + current_path if current_path else internal_dir_str
 
         if hasattr(os, "add_dll_directory"):
-            os.add_dll_directory(internal_dir_str)
+            _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(internal_dir_str))
 
     if tcl_dir.exists():
         os.environ["TCL_LIBRARY"] = str(tcl_dir)
@@ -39,7 +39,10 @@ def _configure_tcl_runtime() -> None:
         os.environ["TK_LIBRARY"] = str(tk_dir)
 
 
-_configure_tcl_runtime()
+_configure_bootstrap_runtime()
+
+import urllib.error
+import urllib.request
 
 from tkinter import Tk, messagebox, ttk
 
