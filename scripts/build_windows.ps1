@@ -250,8 +250,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $bootstrapExeSource = Join-Path $bootstrapDist "WhisperTurboDesktop.exe"
-$bootstrapExeTarget = Join-Path $bootstrapReleaseDir "WhisperTurboDesktop.exe"
-Copy-Item $bootstrapExeSource $bootstrapExeTarget -Force
+Copy-Item -Path "$bootstrapDist\*" -Destination $bootstrapReleaseDir -Recurse -Force
 
 $iscc = Resolve-IsccPath
 if ($null -ne $iscc) {
