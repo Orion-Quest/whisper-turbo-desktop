@@ -11,7 +11,7 @@ from PySide6.QtCore import QThread, Signal
 from whisper.utils import get_writer
 
 from whisper_turbo_desktop.models.transcription import TranscriptionRequest
-from whisper_turbo_desktop.utils.runtime import resolve_model_source
+from whisper_turbo_desktop.utils.runtime import is_model_cached, local_whisper_cache_dir, resolve_model_source
 
 
 class TranscriptionCancelled(RuntimeError):
@@ -89,6 +89,7 @@ class TranscriptionWorker(QThread):
 
         transcribe_module = importlib.import_module("whisper.transcribe")
         original_tqdm = transcribe_module.tqdm.tqdm
+        original_whisper_tqdm = whisper.tqdm
         ProgressBridge.progress_callback = self.progress_changed.emit
         ProgressBridge.cancel_callback = lambda: self._cancel_requested
 
@@ -97,14 +98,23 @@ class TranscriptionWorker(QThread):
             model_source = resolve_model_source(self.request.model)
             device = self._resolve_device()
 
-            self.state_changed.emit(f"Loading model on {device}...")
+            if not is_model_cached(self.request.model):
+                self.state_changed.emit(
+                    f"Downloading model to {local_whisper_cache_dir()}..."
+                )
+                self.log_line.emit(
+                    f"Model {self.request.model} is not cached yet. Download will start on first load."
+                )
+            else:
+                self.state_changed.emit(f"Loading model on {device}...")
             self.log_line.emit(f"Model source: {model_source}")
 
             if self.request.model == "turbo" and self.request.task == "translate":
                 self.warning_issued.emit(
-                    "Turbo is bundled for convenience, but medium or large-v3 is usually more reliable for translation quality."
+                    "Turbo can translate to English, but medium or large-v3 is usually more reliable for translation quality."
                 )
 
+            whisper.tqdm = WhisperProgressBar
             model = whisper.load_model(model_source, device=device)
 
             self.state_changed.emit("Running Whisper...")
@@ -158,6 +168,7 @@ class TranscriptionWorker(QThread):
             )
         finally:
             transcribe_module.tqdm.tqdm = original_tqdm
+            whisper.tqdm = original_whisper_tqdm
             ProgressBridge.progress_callback = None
             ProgressBridge.cancel_callback = None
 
