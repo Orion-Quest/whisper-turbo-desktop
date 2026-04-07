@@ -2,7 +2,11 @@
 
 Windows-only desktop GUI for local `openai/whisper` transcription and English translation.
 
-The app uses the bundled Whisper `turbo` model directly through the Python API, so the packaged release does not depend on a separately installed Python runtime or an external Whisper CLI.
+The project now uses a two-stage release model:
+
+- Users download a small bootstrap installer
+- On first launch, the bootstrap downloads the runtime package and `ffmpeg`
+- On first actual transcription, Whisper downloads the `turbo` model if it is not already cached
 
 ## Features
 
@@ -12,20 +16,47 @@ The app uses the bundled Whisper `turbo` model directly through the Python API, 
 - `Source Language` input plus `Output Language` selection
 - `Output Language = Original` maps to Whisper `transcribe`
 - `Output Language = English (Translate)` maps to Whisper `translate`
-- Real progress from the embedded Whisper runtime
+- Real progress display during transcription
+- Runtime model download on first use
 - History view with double-click open for output file or folder
 - Output preview for `txt`, `srt`, `vtt`, `json`, and `tsv`
-- Runtime checks for bundled `ffmpeg`, `whisper`, `torch`, and `CUDA`
-- Portable release bundles `ffmpeg.exe`, the `large-v3-turbo.pt` model, default config, and a fallback font
+- Runtime checks for managed `ffmpeg`, `whisper`, `torch`, `CUDA`, and model cache state
+
+## Runtime Download Strategy
+
+### First Launch
+
+The installed bootstrap launcher downloads:
+
+- the packaged runtime payload
+- the managed `ffmpeg` payload
+
+into the local application install directory.
+
+### First Transcription
+
+Whisper downloads the `turbo` model into:
+
+- `%USERPROFILE%\\.cache\\whisper`
+
+if the model is not already cached.
 
 ## Runtime Requirements
 
-- Windows 10/11
-- Python `3.11.x`
-- Recommended: CUDA-enabled `torch`
-- Required: `openai-whisper`, `PySide6`
+### End Users
 
-## Install
+- Windows 10/11
+- Internet access on first launch
+- Internet access on first transcription if the model is not cached
+
+### Development
+
+- Python `3.11.x`
+- `openai-whisper`
+- `PySide6`
+- `ffmpeg` available in `PATH`
+
+## Development Install
 
 ```powershell
 python --version
@@ -60,7 +91,8 @@ whisper-turbo-desktop
 2. Set `Source Language` if you want to skip auto-detection.
 3. Choose `Output Language`.
 4. Click `Run Current`.
-5. Double-click an output file to open it.
+5. If the model is not cached yet, Whisper will download it automatically.
+6. Double-click an output file to open it.
 
 ### Batch Queue
 
@@ -77,72 +109,37 @@ whisper-turbo-desktop
 - Double-click a history item to open the first available output file.
 - If the output file is missing, the app opens the recorded output folder instead.
 
-## Output Language Notes
-
-- `Original` keeps the spoken language and uses Whisper `transcribe`
-- `English (Translate)` requests English output and uses Whisper `translate`
-- Official Whisper does not provide arbitrary target-language translation
-- For non-English to Chinese or other target languages, you need a second translation step after Whisper
-
 ## Build And Distribution
 
-This repository includes a Windows packaging flow based on PyInstaller.
+This repository now produces four release asset types:
 
-- Build dependencies are listed in [requirements-build.txt](requirements-build.txt)
-- The PyInstaller spec is in [packaging/whisper_turbo_desktop.spec](packaging/whisper_turbo_desktop.spec)
-- The build script is [scripts/build_windows.ps1](scripts/build_windows.ps1)
-- Packaging notes are in [packaging/BUILD.md](packaging/BUILD.md)
+- bootstrap installer
+- runtime ZIP asset or runtime ZIP parts
+- `ffmpeg` ZIP asset
+- release manifest plus checksums
 
-Typical build flow:
+Build flow:
 
 ```powershell
-python -m pip install -r requirements-build.txt
+$env:WTD_PYTHON='E:\Users\mc_leafwave\anaconda3\envs\my_11\python.exe'
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
 ```
 
-## GitHub Release Download
-
-Recommended README download link pattern after you publish a release:
-
-```markdown
-[Open Latest Release](https://github.com/Orion-Quest/whisper-turbo-desktop/releases/latest)
-```
-
-Important:
-
-- The current portable payload is about `6.17 GB` with the bundled `turbo` model and bundled `ffmpeg.exe`
-- A single GitHub release asset is usually not a practical delivery format for this payload size
-- For truly one-click end-user delivery, use one of these:
-  - external object storage/CDN for the portable folder or archive
-  - a bootstrap installer that downloads the payload during setup
-  - a multi-part installer/release strategy
-- Current public release page:
-  - `https://github.com/Orion-Quest/whisper-turbo-desktop/releases/latest`
-
-The build script resolves these bundled assets automatically:
-
-- `large-v3-turbo.pt` from `%USERPROFILE%\.cache\whisper`
-- `ffmpeg.exe` from `WTD_FFMPEG_PATH`, Scoop, or the current `ffmpeg` command
-- `assets/config/default_settings.json`
-- `assets/fonts/DejaVuSans.ttf`
-
-Release outputs:
-
-- Portable app folder: `release/WhisperTurboDesktop-windows-x64-portable`
-- Optional ZIP: `release/WhisperTurboDesktop-windows-x64-portable.zip` when the payload is 2 GB or smaller
+Generated outputs are placed under `release/`.
 
 ## Repository Layout
 
 ```text
-src/whisper_turbo_desktop/   Application source
-scripts/                     Dev and build scripts
-packaging/                   PyInstaller spec and packaging docs
-docs/                        Release and handoff docs
+src/whisper_turbo_desktop/   Runtime application source
+src/whisper_turbo_bootstrap/ Bootstrap launcher source
+scripts/                     Build scripts
+packaging/                   PyInstaller specs and installer script
+docs/                        Release and rollout notes
 ```
 
 ## Known Constraints
 
-- `turbo` is optimized for speed; `medium` or `large-v3` is usually safer for translation quality
-- Packaging a Whisper + Torch desktop app with the bundled `turbo` model creates a very large Windows bundle
-- PyInstaller builds can take significant time and disk space
-- A GitHub single-file release asset may be impractical for this payload size; use the portable folder directly, external storage, or a multi-part/installer strategy
+- First launch requires network access because runtime and `ffmpeg` are downloaded at that time
+- First transcription may still require network access if the model is not cached
+- Torch remains the main size driver in the runtime package
+- Large runtime ZIPs may be split into parts for GitHub Releases
