@@ -43,6 +43,7 @@ from whisper_turbo_desktop.services.whisper_runner import (
     TranscriptionResult,
     TranscriptionWorker,
 )
+from whisper_turbo_desktop.utils.runtime import local_whisper_cache_dir
 
 OUTPUT_LANGUAGE_TO_TASK = {
     "Original": "transcribe",
@@ -160,6 +161,14 @@ class MainWindow(QMainWindow):
         self.task_note.setWordWrap(True)
         self.task_note.setStyleSheet("color: #b45309;")
         form.addRow("Note", self.task_note)
+
+        self.runtime_hint_label = QLabel(
+            f"Installed builds fetch runtime assets and ffmpeg through the bootstrap launcher.\n"
+            f"The Whisper model still downloads on first transcription to {local_whisper_cache_dir()}."
+        )
+        self.runtime_hint_label.setWordWrap(True)
+        self.runtime_hint_label.setStyleSheet("color: #475569;")
+        form.addRow("Runtime Hints", self.runtime_hint_label)
 
         actions_group = QGroupBox("Actions")
         actions = QGridLayout(actions_group)
@@ -685,10 +694,12 @@ class MainWindow(QMainWindow):
     def _update_task_note(self) -> None:
         if self.output_language_combo.currentText() == "English (Translate)":
             self.task_note.setText(
-                "The bundled turbo model supports English translation, but it is still optimized for speed over maximum translation quality."
+                "English (Translate) uses Whisper translate mode. The turbo model will be downloaded on first use if it is not already cached."
             )
             return
-        self.task_note.setText("Original output keeps the spoken language and uses Whisper transcribe mode.")
+        self.task_note.setText(
+            "Original output keeps the spoken language and uses Whisper transcribe mode. The model will be downloaded on first use if needed."
+        )
 
     def _apply_input_file(self, file_path: Path) -> None:
         self.input_path_edit.setText(str(file_path))
