@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 import subprocess
 from dataclasses import dataclass
+
+from PySide6.QtCore import QThread, Signal
 
 from whisper_turbo_desktop.utils.runtime import (
     is_model_cached,
@@ -9,12 +12,31 @@ from whisper_turbo_desktop.utils.runtime import (
     managed_ffmpeg_path,
 )
 
+LOGGER = logging.getLogger("whisper_turbo_desktop.diagnostics")
+
 
 @dataclass(slots=True)
 class DiagnosticItem:
     name: str
     ok: bool
     details: str
+
+
+class DiagnosticsWorker(QThread):
+    finished_success = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, service: "DiagnosticsService", python_executable: str) -> None:
+        super().__init__()
+        self.service = service
+        self.python_executable = python_executable
+
+    def run(self) -> None:
+        try:
+            self.finished_success.emit(self.service.run(self.python_executable))
+        except Exception as exc:
+            LOGGER.exception("Diagnostics worker failed")
+            self.failed.emit(str(exc))
 
 
 class DiagnosticsService:

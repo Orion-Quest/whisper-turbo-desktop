@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 from whisper_turbo_desktop.models.history import HistoryRecord
 from whisper_turbo_desktop.models.queue_task import QueueTask
 from whisper_turbo_desktop.models.transcription import SUPPORTED_MODELS, TranscriptionRequest
-from whisper_turbo_desktop.services.diagnostics_service import DiagnosticsService
+from whisper_turbo_desktop.services.diagnostics_service import DiagnosticItem, DiagnosticsService, DiagnosticsWorker
 from whisper_turbo_desktop.services.history_service import HistoryService
 from whisper_turbo_desktop.services.settings_service import AppSettings, SettingsService
 from whisper_turbo_desktop.services.whisper_runner import (
@@ -75,6 +75,7 @@ class MainWindow(QMainWindow):
         self.history_records = self.history_service.load()
         self.queue_tasks: list[QueueTask] = []
         self.worker: TranscriptionWorker | None = None
+        self.diagnostics_worker: DiagnosticsWorker | None = None
         self.queue_running = False
         self.current_run_origin = "single"
         self.current_queue_task_id: str | None = None
@@ -373,9 +374,26 @@ class MainWindow(QMainWindow):
         self._apply_input_file(Path(file_paths[0]))
 
     def refresh_diagnostics(self) -> None:
-        diagnostics = self.diagnostics_service.run(sys.executable)
+        if self.diagnostics_worker is not None and self.diagnostics_worker.isRunning():
+            return
+
+        self.diagnostics_text.setPlainText("Running diagnostics...")
+        self.refresh_button.setEnabled(False)
+        self.diagnostics_worker = DiagnosticsWorker(self.diagnostics_service, sys.executable)
+        self.diagnostics_worker.finished_success.connect(self._on_diagnostics_finished)
+        self.diagnostics_worker.failed.connect(self._on_diagnostics_failed)
+        self.diagnostics_worker.finished.connect(self._on_diagnostics_worker_finished)
+        self.diagnostics_worker.start()
+
+    def _on_diagnostics_finished(self, diagnostics: list[DiagnosticItem]) -> None:
         lines = [f"[{'OK' if item.ok else 'FAIL'}] {item.name}: {item.details}" for item in diagnostics]
         self.diagnostics_text.setPlainText("\n".join(lines))
+
+    def _on_diagnostics_failed(self, message: str) -> None:
+        self.diagnostics_text.setPlainText(f"[FAIL] Diagnostics: {message}")
+
+    def _on_diagnostics_worker_finished(self) -> None:
+        self.refresh_button.setEnabled(not self._is_worker_running())
 
     def start_task(self) -> None:
         try:
@@ -638,7 +656,7 @@ class MainWindow(QMainWindow):
             task = self._active_queue_task()
             if task is not None:
                 task.note = message
-                self._render_queue(selected_id=task.queue_id)
+                self._refresh_queue_task_item(task)
                 decorated = f"Queue {self._queue_position(task.queue_id)}/{len(self.queue_tasks)} | {task.request.input_path.name} | {message}"
                 self.status_label.setText(decorated)
                 self.progress_detail_label.setText(decorated)
@@ -651,7 +669,7 @@ class MainWindow(QMainWindow):
         task = self._active_queue_task()
         if task is not None:
             task.progress = value
-            self._render_queue(selected_id=task.queue_id)
+            self._refresh_queue_task_item(task)
 
     def _preview_best_output(self, files: list[Path]) -> None:
         priority = {".txt": 0, ".srt": 1, ".vtt": 2, ".json": 3, ".tsv": 4}
@@ -677,7 +695,7 @@ class MainWindow(QMainWindow):
         self.add_files_queue_button.setEnabled(not running)
         self.start_queue_button.setEnabled(not running)
         self.cancel_button.setEnabled(running)
-        self.refresh_button.setEnabled(not running)
+        self.refresh_button.setEnabled(not running and not self._is_diagnostics_running())
         self.remove_queue_item_button.setEnabled(not running)
         self.clear_queue_button.setEnabled(not running)
         if not running and self.progress_bar.value() < 100:
@@ -736,6 +754,25 @@ class MainWindow(QMainWindow):
                 self.queue_detail_text.setPlainText(task.details_text())
                 break
 
+    def _refresh_queue_task_item(self, task: QueueTask) -> None:
+        item = self._queue_item_for_task(task.queue_id)
+        if item is None:
+            self._render_queue(selected_id=task.queue_id)
+            return
+
+        item.setText(task.summary_text())
+        item.setData(Qt.ItemDataRole.UserRole, task)
+        if self.queue_list.currentItem() is item:
+            self.queue_detail_text.setPlainText(task.details_text())
+
+    def _queue_item_for_task(self, queue_id: str) -> QListWidgetItem | None:
+        for row in range(self.queue_list.count()):
+            item = self.queue_list.item(row)
+            task = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(task, QueueTask) and task.queue_id == queue_id:
+                return item
+        return None
+
     def _render_history(self) -> None:
         self.history_list.clear()
         for record in self.history_records:
@@ -772,6 +809,9 @@ class MainWindow(QMainWindow):
 
     def _is_worker_running(self) -> bool:
         return self.worker is not None and self.worker.isRunning()
+
+    def _is_diagnostics_running(self) -> bool:
+        return self.diagnostics_worker is not None and self.diagnostics_worker.isRunning()
 
     def _open_path(self, path: Path) -> None:
         try:
