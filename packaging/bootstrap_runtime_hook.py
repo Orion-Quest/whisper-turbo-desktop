@@ -1,0 +1,3 @@
+from whisper_turbo_bootstrap.runtime import configure_bootstrap_runtime
+
+configure_bootstrap_runtime()

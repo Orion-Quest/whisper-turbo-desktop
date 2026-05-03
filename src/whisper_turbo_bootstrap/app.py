@@ -2,44 +2,32 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
+from typing import Sequence
 
-_DLL_DIRECTORY_HANDLES = []
+from whisper_turbo_bootstrap.runtime import configure_bootstrap_runtime
 
-
-def _configure_bootstrap_runtime() -> None:
-    if not getattr(sys, "frozen", False):
-        return
-
-    app_dir = Path(sys.executable).resolve().parent
-    internal_dir = app_dir / "_internal"
-    tcl_dir = internal_dir / "_tcl_data"
-    tk_dir = internal_dir / "_tk_data"
-    internal_dir_str = str(internal_dir)
-
-    if internal_dir.exists():
-        current_path = os.environ.get("PATH", "")
-        path_parts = current_path.split(os.pathsep) if current_path else []
-        if internal_dir_str not in path_parts:
-            os.environ["PATH"] = internal_dir_str + os.pathsep + current_path if current_path else internal_dir_str
-
-        if hasattr(os, "add_dll_directory"):
-            _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(internal_dir_str))
-
-    if tcl_dir.exists():
-        os.environ["TCL_LIBRARY"] = str(tcl_dir)
-    if tk_dir.exists():
-        os.environ["TK_LIBRARY"] = str(tk_dir)
+configure_bootstrap_runtime()
 
 
-_configure_bootstrap_runtime()
+def _load_ssl_for_urllib() -> str | None:
+    try:
+        import ssl
+
+        ssl.create_default_context()
+    except Exception as exc:
+        return str(exc)
+    return None
+
+
+_SSL_IMPORT_ERROR = _load_ssl_for_urllib()
 
 import urllib.error
 import urllib.request
@@ -50,6 +38,68 @@ from tkinter import Tk, messagebox, ttk
 APP_NAME = "Whisper Turbo Desktop"
 INSTALL_DIR_NAME = "WhisperTurboDesktop"
 MANIFEST_FILENAME = "release-manifest.json"
+
+
+class DownloadBackend(Enum):
+    PYTHON = "python"
+    CURL = "curl"
+
+
+def python_https_error() -> str | None:
+    if _SSL_IMPORT_ERROR is not None:
+        return f"Python SSL support failed to initialize: {_SSL_IMPORT_ERROR}"
+    if not isinstance(getattr(urllib.request, "HTTPSHandler", None), type):
+        return "urllib has no HTTPS handler"
+    return None
+
+
+def curl_executable() -> str | None:
+    return shutil.which("curl.exe") or shutil.which("curl")
+
+
+def select_download_backend() -> tuple[DownloadBackend, str | None]:
+    https_error = python_https_error()
+    if https_error is None:
+        return DownloadBackend.PYTHON, None
+
+    curl_path = curl_executable()
+    if curl_path is not None:
+        return DownloadBackend.CURL, curl_path
+
+    raise RuntimeError(
+        "HTTPS downloads are unavailable. "
+        f"{https_error}, and no curl executable was found for fallback downloads."
+    )
+
+
+def ensure_https_support() -> None:
+    select_download_backend()
+
+
+def _release_self_test() -> int:
+    select_download_backend()
+    return 0
+
+
+def _run_curl_download(url: str, destination: Path, curl_path: str) -> None:
+    command = [
+        curl_path,
+        "--location",
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--output",
+        str(destination),
+        url,
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(
+            f"Download failed: {url}\n"
+            f"curl exited with code {result.returncode}"
+            + (f": {details}" if details else "")
+        )
 
 
 @dataclass(slots=True)
@@ -151,7 +201,11 @@ class BootstrapUI:
         self.root.destroy()
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--self-test" in args:
+        return _release_self_test()
+
     ui = BootstrapUI()
     try:
         manifest = ReleaseManifest.load(manifest_path())
@@ -185,6 +239,7 @@ class BootstrapLauncher:
             self.ui.close()
             return
 
+        ensure_https_support()
         self._ensure_disk_space()
         with tempfile.TemporaryDirectory(prefix="wtd-bootstrap-") as tmp:
             temp_root = Path(tmp)
@@ -248,20 +303,26 @@ class BootstrapLauncher:
         return archive_path
 
     def _download_file(self, url: str, destination: Path, expected_sha256: str, expected_size: int) -> None:
-        try:
-            with urllib.request.urlopen(url) as response, destination.open("wb") as output:
-                total = int(response.headers.get("Content-Length") or expected_size or 0)
-                downloaded = 0
-                while True:
-                    chunk = response.read(1024 * 256)
-                    if not chunk:
-                        break
-                    output.write(chunk)
-                    downloaded += len(chunk)
-                    if total > 0:
-                        self.ui.set_progress(int(downloaded * 100 / total))
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"Download failed: {url}\n{exc}") from exc
+        backend, curl_path = select_download_backend()
+        if backend is DownloadBackend.PYTHON:
+            try:
+                with urllib.request.urlopen(url) as response, destination.open("wb") as output:
+                    total = int(response.headers.get("Content-Length") or expected_size or 0)
+                    downloaded = 0
+                    while True:
+                        chunk = response.read(1024 * 256)
+                        if not chunk:
+                            break
+                        output.write(chunk)
+                        downloaded += len(chunk)
+                        if total > 0:
+                            self.ui.set_progress(int(downloaded * 100 / total))
+            except urllib.error.URLError as exc:
+                raise RuntimeError(f"Download failed: {url}\n{exc}") from exc
+        elif curl_path is not None:
+            self.ui.set_detail(f"{destination.name} (curl fallback)")
+            _run_curl_download(url, destination, curl_path)
+            self.ui.set_progress(100)
 
         digest = file_sha256(destination)
         if digest != expected_sha256:
