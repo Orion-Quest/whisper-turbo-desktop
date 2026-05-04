@@ -22,6 +22,11 @@ class TranscriptionRequest:
     device: str = "auto"
     output_format: str = "srt"
     python_executable: str = sys.executable
+    translation_enabled: bool = False
+    translation_api_key: str = ""
+    translation_base_url: str = "https://api.openai.com/v1"
+    translation_model: str = "gpt-4o-mini"
+    translation_target_language: str = ""
     verbose: bool = False
 
     def validate(self) -> None:
@@ -37,6 +42,15 @@ class TranscriptionRequest:
             raise ValueError(f"Unsupported output format: {self.output_format}")
         if not self.python_executable:
             raise ValueError("Python executable must not be empty")
+        if self.translation_enabled:
+            if not self.translation_target_language.strip():
+                raise ValueError("Translation target language must not be empty")
+            if not self.translation_api_key.strip():
+                raise ValueError("Translation API key must not be empty")
+            if not self.translation_base_url.strip():
+                raise ValueError("Translation base URL must not be empty")
+            if not self.translation_model.strip():
+                raise ValueError("Translation model must not be empty")
 
     def build_command(self) -> list[str]:
         self.validate()
@@ -69,6 +83,8 @@ class TranscriptionRequest:
         stem = self.input_path.stem
         candidates: list[Path] = []
         for path in self.output_dir.glob(f"{stem}.*"):
+            if path.stem != stem:
+                continue
             if path.suffix.lower() in {".txt", ".srt", ".vtt", ".json", ".tsv"}:
                 candidates.append(path)
         return sorted(candidates)

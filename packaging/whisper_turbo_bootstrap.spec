@@ -13,10 +13,10 @@ a = Analysis(
     pathex=[str(src_root)],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=["whisper_turbo_bootstrap.runtime"],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(project_root / "packaging" / "bootstrap_runtime_hook.py")],
     excludes=[
         "PySide6",
         "torch",

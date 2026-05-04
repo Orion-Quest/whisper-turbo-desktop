@@ -23,6 +23,10 @@ class AppSettings:
     default_source_language: str = ""
     default_device: str = "auto"
     default_output_format: str = "srt"
+    translation_api_key: str = ""
+    translation_base_url: str = "https://api.openai.com/v1"
+    translation_model: str = "gpt-4o-mini"
+    translation_target_language: str = ""
 
 
 class SettingsService:
@@ -79,6 +83,14 @@ class SettingsService:
             ),
             default_device=payload.get("default_device", "auto"),
             default_output_format=payload.get("default_output_format", "srt"),
+            translation_api_key=payload.get("translation_api_key", ""),
+            translation_base_url=payload.get(
+                "translation_base_url", "https://api.openai.com/v1"
+            ),
+            translation_model=payload.get("translation_model", "gpt-4o-mini"),
+            translation_target_language=payload.get(
+                "translation_target_language", ""
+            ),
         )
 
     @staticmethod
