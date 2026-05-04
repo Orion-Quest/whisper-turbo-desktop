@@ -27,6 +27,41 @@ def test_settings_service_recovers_from_invalid_json(tmp_path: Path, monkeypatch
     assert settings.default_output_format == "srt"
 
 
+def test_settings_service_loads_translation_provider_fields(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "whisper_turbo_desktop.services.settings_service.app_data_dir",
+        lambda: tmp_path,
+    )
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "python_executable": "E:/Python/python.exe",
+                "default_output_dir": "C:/output",
+                "default_model": "turbo",
+                "default_output_language": "Spanish",
+                "default_source_language": "en",
+                "default_device": "auto",
+                "default_output_format": "srt",
+                "translation_api_key": "sk-test",
+                "translation_base_url": "https://api.example.com/v1",
+                "translation_model": "gpt-4o-mini",
+                "translation_target_language": "Spanish",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = SettingsService().load()
+
+    assert settings.translation_api_key == "sk-test"
+    assert settings.translation_base_url == "https://api.example.com/v1"
+    assert settings.translation_model == "gpt-4o-mini"
+    assert settings.translation_target_language == "Spanish"
+
+
 def test_history_service_recovers_from_invalid_json(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         "whisper_turbo_desktop.services.history_service.app_data_dir",
