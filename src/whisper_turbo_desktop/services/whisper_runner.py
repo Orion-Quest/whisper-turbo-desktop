@@ -83,6 +83,8 @@ class TranscriptionWorker(QThread):
         super().__init__()
         self.request = request
         self._cancel_requested = False
+        self._whisper_progress_start = 0
+        self._whisper_progress_end = 100
 
     def cancel(self) -> None:
         self._cancel_requested = True
@@ -90,16 +92,17 @@ class TranscriptionWorker(QThread):
 
     def run(self) -> None:
         started_at = time.monotonic()
-        self.progress_changed.emit(0)
+        self._emit_progress(0)
 
         transcribe_module = importlib.import_module("whisper.transcribe")
         original_tqdm = transcribe_module.tqdm.tqdm
         original_whisper_tqdm = whisper.tqdm
-        ProgressBridge.progress_callback = self.progress_changed.emit
+        ProgressBridge.progress_callback = self._emit_whisper_progress
         ProgressBridge.cancel_callback = lambda: self._cancel_requested
 
         try:
             self.request.validate()
+            self._emit_progress(3)
             self.request.output_dir.mkdir(parents=True, exist_ok=True)
             model_source = resolve_model_source(self.request.model)
             device = self._resolve_device()
@@ -114,6 +117,7 @@ class TranscriptionWorker(QThread):
             else:
                 self.state_changed.emit(f"Loading model on {device}...")
             self.log_line.emit(f"Model source: {model_source}")
+            self._emit_progress(6)
 
             if self.request.model == "turbo" and self.request.task == "translate":
                 self.warning_issued.emit(
@@ -122,15 +126,21 @@ class TranscriptionWorker(QThread):
 
             whisper.tqdm = WhisperProgressBar
             model = whisper.load_model(model_source, device=device)
+            self._emit_progress(12)
 
             self.state_changed.emit("Running Whisper...")
+            self._set_whisper_progress_range(
+                12, 68 if self.request.translation_enabled else 88
+            )
             transcribe_module.tqdm.tqdm = WhisperProgressBar
             result = self._transcribe_audio(model, task=self.request.task, device=device)
+            self._emit_progress(68 if self.request.translation_enabled else 88)
 
             if self._cancel_requested:
                 raise TranscriptionCancelled("Task cancelled")
 
             self.state_changed.emit("Writing output files...")
+            self._emit_progress(72 if self.request.translation_enabled else 94)
             writer = get_writer(self.request.output_format, str(self.request.output_dir))
             writer(result, str(self.request.input_path))
 
@@ -141,7 +151,7 @@ class TranscriptionWorker(QThread):
                 raise RuntimeError("Whisper finished without producing output files")
 
             duration_seconds = time.monotonic() - started_at
-            self.progress_changed.emit(100)
+            self._emit_progress(100)
             self.state_changed.emit("Task completed")
             self.finished_success.emit(
                 TranscriptionResult(
@@ -174,6 +184,21 @@ class TranscriptionWorker(QThread):
             ProgressBridge.progress_callback = None
             ProgressBridge.cancel_callback = None
 
+    def _set_whisper_progress_range(self, start: int, end: int) -> None:
+        self._whisper_progress_start = start
+        self._whisper_progress_end = end
+
+    def _emit_progress(self, value: int) -> None:
+        self.progress_changed.emit(max(0, min(100, value)))
+
+    def _emit_whisper_progress(self, whisper_percent: int) -> None:
+        bounded_percent = max(0, min(100, whisper_percent))
+        span = self._whisper_progress_end - self._whisper_progress_start
+        mapped_value = self._whisper_progress_start + int(
+            round(span * bounded_percent / 100)
+        )
+        self._emit_progress(mapped_value)
+
     def _resolve_device(self) -> str:
         if self.request.device == "auto":
             return "cuda" if torch.cuda.is_available() else "cpu"
@@ -193,6 +218,8 @@ class TranscriptionWorker(QThread):
     ) -> None:
         if not self.request.translation_enabled:
             return
+        self.state_changed.emit("Preparing API subtitle translation...")
+        self._emit_progress(74)
         source_result = self._translation_source_result(
             result, model=model, device=device
         )
@@ -217,14 +244,19 @@ class TranscriptionWorker(QThread):
             target_language=self.request.translation_target_language,
             source_language=self.request.language,
         )
+        self.state_changed.emit("Translating subtitles with API...")
+        self._emit_progress(86)
         translated = translator.translate_segments(segments)
+        self._emit_progress(94)
         stem = self.request.input_path.stem
         srt_path = self.request.output_dir / f"{stem}.translated.srt"
         vtt_path = self.request.output_dir / f"{stem}.translated.vtt"
         txt_path = self.request.output_dir / f"{stem}.translated.txt"
+        self.state_changed.emit("Writing translated subtitle sidecars...")
         srt_path.write_text(translated.srt_text, encoding="utf-8")
         vtt_path.write_text(translated.vtt_text, encoding="utf-8")
         txt_path.write_text(translated.txt_text, encoding="utf-8")
+        self._emit_progress(96)
 
     def _translation_source_result(
         self, result: dict[str, Any], *, model: Any, device: str
@@ -235,7 +267,9 @@ class TranscriptionWorker(QThread):
         self.state_changed.emit(
             "Transcribing source-language text for translated subtitles..."
         )
+        self._set_whisper_progress_range(74, 84)
         source_result = self._transcribe_audio(model, task="transcribe", device=device)
+        self._emit_progress(84)
         if self._cancel_requested:
             raise TranscriptionCancelled("Task cancelled")
         return source_result

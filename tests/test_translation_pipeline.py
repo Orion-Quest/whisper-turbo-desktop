@@ -119,6 +119,66 @@ def test_translation_pipeline_writes_translated_subtitles(
     )
 
 
+def test_worker_maps_whisper_progress_before_write_and_completion(
+    tmp_path: Path, monkeypatch
+) -> None:
+    input_path = tmp_path / "input.wav"
+    input_path.write_bytes(b"fake audio")
+    output_dir = tmp_path / "out"
+
+    class FakeModel:
+        def transcribe(self, *_args, **_kwargs):
+            assert whisper_runner.ProgressBridge.progress_callback is not None
+            whisper_runner.ProgressBridge.progress_callback(50)
+            whisper_runner.ProgressBridge.progress_callback(100)
+            return {
+                "segments": [
+                    {"id": 0, "start": 0.0, "end": 1.0, "text": "Hello"},
+                ],
+                "text": "Hello",
+            }
+
+    class FakeWriter:
+        def __call__(self, _result, _input_path: str) -> None:
+            (output_dir / "input.srt").write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\nHello\n",
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(
+        whisper_runner, "get_writer", lambda _format, _dir: FakeWriter()
+    )
+    monkeypatch.setattr(
+        whisper_runner.whisper, "load_model", lambda *args, **kwargs: FakeModel()
+    )
+    monkeypatch.setattr(whisper_runner, "resolve_model_source", lambda model: model)
+    monkeypatch.setattr(whisper_runner, "is_model_cached", lambda _model: True)
+    monkeypatch.setattr(whisper_runner.torch.cuda, "is_available", lambda: False)
+
+    request = TranscriptionRequest(
+        input_path=input_path,
+        output_dir=output_dir,
+        model="turbo",
+        task="transcribe",
+        language=None,
+        device="auto",
+        output_format="srt",
+    )
+    progress_values: list[int] = []
+    result_holder: list[object] = []
+
+    worker = TranscriptionWorker(request)
+    worker.progress_changed.connect(progress_values.append)
+    worker.finished_success.connect(result_holder.append)
+    worker.run()
+
+    assert len(result_holder) == 1
+    assert 88 in progress_values
+    assert 94 in progress_values
+    assert progress_values.index(88) < progress_values.index(94)
+    assert progress_values.index(94) < progress_values.index(100)
+
+
 def test_translation_pipeline_uses_source_transcript_for_sidecar_translation_when_whisper_translates_to_english(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -234,6 +294,94 @@ def test_translation_pipeline_uses_source_transcript_for_sidecar_translation_whe
         (output_dir / "input.translated.srt").read_text(encoding="utf-8")
         == "1\n00:00:00,000 --> 00:00:01,000\nこれは元のテキストです。\n"
     )
+
+
+def test_worker_reports_separate_api_translation_progress_stage(
+    tmp_path: Path, monkeypatch
+) -> None:
+    input_path = tmp_path / "input.wav"
+    input_path.write_bytes(b"fake audio")
+    output_dir = tmp_path / "out"
+
+    class FakeModel:
+        def transcribe(self, *_args, **_kwargs):
+            assert whisper_runner.ProgressBridge.progress_callback is not None
+            whisper_runner.ProgressBridge.progress_callback(100)
+            return {
+                "segments": [
+                    {"id": 0, "start": 0.0, "end": 1.0, "text": "Hello"},
+                ],
+                "text": "Hello",
+            }
+
+    class FakeWriter:
+        def __call__(self, _result, _input_path: str) -> None:
+            (output_dir / "input.srt").write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\nHello\n",
+                encoding="utf-8",
+            )
+
+    class FakeTranslator:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def translate_segments(self, _segments):
+            return type(
+                "TranslatedSubtitleResult",
+                (),
+                {
+                    "srt_text": "1\n00:00:00,000 --> 00:00:01,000\nHola\n",
+                    "vtt_text": "WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.000\nHola\n",
+                    "txt_text": "Hola\n",
+                },
+            )()
+
+    monkeypatch.setattr(
+        whisper_runner, "get_writer", lambda _format, _dir: FakeWriter()
+    )
+    monkeypatch.setattr(
+        whisper_runner.whisper, "load_model", lambda *args, **kwargs: FakeModel()
+    )
+    monkeypatch.setattr(
+        whisper_runner,
+        "SubtitleTranslationService",
+        lambda **kwargs: FakeTranslator(**kwargs),
+    )
+    monkeypatch.setattr(whisper_runner, "resolve_model_source", lambda model: model)
+    monkeypatch.setattr(whisper_runner, "is_model_cached", lambda _model: True)
+    monkeypatch.setattr(whisper_runner.torch.cuda, "is_available", lambda: False)
+
+    request = TranscriptionRequest(
+        input_path=input_path,
+        output_dir=output_dir,
+        model="turbo",
+        task="transcribe",
+        language=None,
+        device="auto",
+        output_format="srt",
+        translation_enabled=True,
+        translation_api_key="sk-test",
+        translation_base_url="https://api.example.com/v1",
+        translation_model="gpt-4o-mini",
+        translation_target_language="Spanish",
+    )
+    progress_values: list[int] = []
+    states: list[str] = []
+    result_holder: list[object] = []
+
+    worker = TranscriptionWorker(request)
+    worker.progress_changed.connect(progress_values.append)
+    worker.state_changed.connect(states.append)
+    worker.finished_success.connect(result_holder.append)
+    worker.run()
+
+    assert len(result_holder) == 1
+    assert 68 in progress_values
+    assert 86 in progress_values
+    assert 96 in progress_values
+    assert progress_values.index(68) < progress_values.index(86)
+    assert progress_values.index(96) < progress_values.index(100)
+    assert "Translating subtitles with API..." in states
 
 
 def test_translation_request_requires_api_key(tmp_path: Path) -> None:
