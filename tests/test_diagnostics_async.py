@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -10,6 +11,8 @@ from PySide6.QtWidgets import QApplication
 import whisper_turbo_desktop.ui.main_window as main_window_module
 from whisper_turbo_desktop.models.history import HistoryRecord
 from whisper_turbo_desktop.services.diagnostics_service import DiagnosticItem
+import whisper_turbo_desktop.services.diagnostics_service as diagnostics_module
+from whisper_turbo_desktop.services.diagnostics_service import DiagnosticsService
 from whisper_turbo_desktop.services.settings_service import AppSettings
 from whisper_turbo_desktop.ui.main_window import MainWindow
 
@@ -83,3 +86,39 @@ def test_main_window_refreshes_diagnostics_asynchronously(monkeypatch, qapp) -> 
         if window.diagnostics_worker is not None and window.diagnostics_worker.isRunning():
             window.diagnostics_worker.wait(1000)
         window.close()
+
+
+def test_frozen_diagnostics_do_not_launch_runtime_executable(monkeypatch) -> None:
+    calls: list[list[str]] = []
+    runtime_executable = r"C:\App\runtime\WhisperTurboDesktop.exe"
+
+    def fake_run(command: list[str], **kwargs):
+        calls.append(command)
+        if command[0] == runtime_executable:
+            raise AssertionError("frozen diagnostics must not subprocess the runtime executable")
+        return type("Completed", (), {"returncode": 0, "stdout": "ffmpeg ok", "stderr": ""})()
+
+    monkeypatch.setattr(diagnostics_module, "is_frozen", lambda: True)
+    monkeypatch.setattr(diagnostics_module, "__version__", "9.9.9")
+    monkeypatch.setattr(diagnostics_module.subprocess, "run", fake_run)
+    monkeypatch.setitem(sys.modules, "whisper", type("WhisperModule", (), {"__version__": "2026.1"})())
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        type(
+            "TorchModule",
+            (),
+            {
+                "__version__": "2.9",
+                "cuda": type("CudaModule", (), {"is_available": staticmethod(lambda: False)})(),
+            },
+        )(),
+    )
+
+    diagnostics = DiagnosticsService().run(runtime_executable)
+
+    names = [item.name for item in diagnostics]
+    assert "Python" in names
+    assert "Whisper" in names
+    assert "Torch/CUDA" in names
+    assert all(command[0] != runtime_executable for command in calls)

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import sys
 from dataclasses import dataclass
 
 from PySide6.QtCore import QThread, Signal
 
+from whisper_turbo_desktop import __version__
 from whisper_turbo_desktop.utils.runtime import (
     is_model_cached,
+    is_frozen,
     local_model_cache_path,
     managed_ffmpeg_path,
 )
@@ -50,6 +53,13 @@ class DiagnosticsService:
         ]
 
     def _check_python(self, python_executable: str) -> DiagnosticItem:
+        if is_frozen():
+            version = sys.version.split()[0]
+            return DiagnosticItem(
+                name="Python",
+                ok=True,
+                details=f"bundled Python {version}; app={__version__}; executable={python_executable}",
+            )
         return self._run([python_executable, "--version"], "Python")
 
     def _check_ffmpeg(self) -> DiagnosticItem:
@@ -62,12 +72,28 @@ class DiagnosticsService:
         return self._run(["ffmpeg", "-version"], "FFmpeg")
 
     def _check_whisper(self, python_executable: str) -> DiagnosticItem:
+        if is_frozen():
+            try:
+                import whisper
+            except Exception as exc:
+                return DiagnosticItem(name="Whisper", ok=False, details=str(exc))
+            return DiagnosticItem(name="Whisper", ok=True, details=getattr(whisper, "__version__", "unknown"))
         return self._run(
             [python_executable, "-c", "import whisper; print(whisper.__version__)"],
             "Whisper",
         )
 
     def _check_torch_cuda(self, python_executable: str) -> DiagnosticItem:
+        if is_frozen():
+            try:
+                import torch
+            except Exception as exc:
+                return DiagnosticItem(name="Torch/CUDA", ok=False, details=str(exc))
+            return DiagnosticItem(
+                name="Torch/CUDA",
+                ok=True,
+                details=f"torch={torch.__version__}; cuda={torch.cuda.is_available()}",
+            )
         return self._run(
             [
                 python_executable,
