@@ -12,12 +12,13 @@ The project now uses a two-stage release model:
 
 - Single-run workflow for one audio/video file
 - Batch queue for multiple files with sequential processing
-- Drag-and-drop import
-- `Source Language` input plus `Output Language` selection
-- `Output Language = Original` maps to Whisper `transcribe`
-- `Output Language = English (Translate)` maps to Whisper `translate`
+- Drag-and-drop import with active drop feedback
+- `Spoken Language` input plus `Whisper Mode` selection
+- `Whisper Mode = Original` maps to Whisper `transcribe`
+- `Whisper Mode = English (Translate)` maps to Whisper `translate`
 - Optional OpenAI-compatible subtitle translation to non-English target languages
 - Custom translation API key, endpoint, and model settings
+- Selectable glass/light desktop themes with a gradient progress bar
 - Real progress display during transcription
 - Runtime model download on first use
 - History view with double-click open for output file or folder
@@ -91,23 +92,29 @@ whisper-turbo-desktop
 ### Single Run
 
 1. Choose or drop one media file.
-2. Set `Source Language` if you want to skip auto-detection.
-3. Choose `Output Language`.
-4. Optionally fill in `Translation Settings` if you want translated subtitle sidecars.
+2. Set `Spoken Language` if you want to skip auto-detection.
+3. Choose `Whisper Mode`.
+4. Optionally fill in `Optional API Subtitle Translation` if you want translated subtitle sidecars.
 5. Click `Run Current`.
 6. If the model is not cached yet, Whisper will download it automatically.
 7. Double-click an output file to open it.
 
-### Subtitle Translation Settings
+### Desktop Layout
 
-`Output Language` keeps its existing behavior: `Original` transcribes in the spoken language, and `English (Translate)` uses Whisper's English translate mode.
+The left control rail is for setup and actions: input/output paths, Whisper mode, optional API subtitle translation, queue buttons, and progress. The right workspace is for diagnostics, output files, preview, logs, queue details, and history.
 
-To prepare the optional OpenAI-compatible subtitle translation path, fill in `Translation Settings`:
+The top bar includes a `Theme` selector with `Aurora Glass`, `Slate Glass`, and `Clean Light`. The theme choice is saved with the rest of the app settings.
 
-- `Target Subtitle Language`: desired subtitle language, such as `Spanish` or `Japanese`
-- `API Key`: provider key
-- `Endpoint`: OpenAI-compatible API root such as `https://api.openai.com/v1`, or a full `.../chat/completions` endpoint
-- `Model`: translation model name, for example `gpt-4o-mini`
+### Optional API Subtitle Translation
+
+`Whisper Mode` keeps its existing behavior: `Original` transcribes in the spoken language, and `English (Translate)` uses Whisper's English translate mode.
+
+To prepare the optional OpenAI-compatible subtitle translation path, fill in `Optional API Subtitle Translation`:
+
+- `Extra Subtitle Language`: desired subtitle language, such as `Spanish` or `Japanese`
+- `API Key for Subtitles`: provider key
+- `API Endpoint`: OpenAI-compatible API root such as `https://api.openai.com/v1`, or a full `.../chat/completions` endpoint
+- `API Translation Model`: translation model name, for example `gpt-4o-mini`
 
 When configured, the app keeps the normal Whisper outputs and writes translated sidecar files next to them:
 
@@ -115,13 +122,16 @@ When configured, the app keeps the normal Whisper outputs and writes translated 
 - `<name>.translated.vtt`
 - `<name>.translated.txt`
 
-These values are saved with the rest of the app settings and applied to new runs and queued items. Leave `Target Subtitle Language` empty to skip the optional translation step.
+These values are saved with the rest of the app settings and applied to new runs and queued items. Leave `Extra Subtitle Language` empty to skip the optional translation step.
+
+Long subtitle jobs are translated in batches and stitched back together by subtitle index. The app requests strict JSON from providers that support it and automatically retries without that JSON-mode parameter for OpenAI-compatible endpoints that reject it.
+Transient TLS, timeout, and remote disconnect errors are retried with short backoff before showing a diagnostic message that points to endpoint, proxy/VPN, network, or provider status.
 
 ### Batch Queue
 
-1. Click `Queue Current` to enqueue the current file with the current settings.
-2. Or click `Queue Files` to add multiple files at once.
-3. Click `Start Queue`.
+1. Click `Add Current to Queue` to enqueue the current file with the current settings.
+2. Or click `Add Files to Queue` to add multiple files at once.
+3. Click `Run Queue`.
 4. Use the `Queue` tab to inspect per-task state.
 5. Double-click a completed queue item to open its output file or output folder.
 
