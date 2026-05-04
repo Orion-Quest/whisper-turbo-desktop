@@ -32,6 +32,7 @@ class FakeHistoryService:
 def test_translation_controls_round_trip_settings_and_request(monkeypatch, qapp, tmp_path: Path) -> None:
     monkeypatch.setattr(MainWindow, "refresh_diagnostics", lambda self: None)
     monkeypatch.setattr(main_window_module, "HistoryService", FakeHistoryService)
+    monkeypatch.setattr(main_window_module, "install_root_dir", lambda: Path(r"C:\Apps\WhisperTurboDesktop"))
 
     input_path = tmp_path / "clip.wav"
     input_path.write_bytes(b"RIFF")
@@ -58,6 +59,9 @@ def test_translation_controls_round_trip_settings_and_request(monkeypatch, qapp,
             "Original",
             "English (Translate)",
         ]
+        assert window.install_path_label.text() == r"C:\Apps\WhisperTurboDesktop"
+        assert window.runtime_path_edit.text() == r"C:\Apps\WhisperTurboDesktop"
+        assert window.open_install_button.text() == "Open Install Folder"
         assert window.translation_settings_group.title() == "Translation Settings"
         assert window.translation_api_key_edit.text() == "sk-loaded"
         assert window.translation_base_url_edit.text() == "https://api.example.com/v1"
@@ -69,6 +73,7 @@ def test_translation_controls_round_trip_settings_and_request(monkeypatch, qapp,
         window.translation_base_url_edit.setText("https://gateway.example.test/v1")
         window.translation_model_edit.setText("custom-translation-model")
         window.translation_target_language_edit.setText("Japanese")
+        window._update_task_note()
 
         request = window._build_request()
         window._persist_settings()
@@ -82,5 +87,29 @@ def test_translation_controls_round_trip_settings_and_request(monkeypatch, qapp,
         assert settings_service.settings.translation_base_url == "https://gateway.example.test/v1"
         assert settings_service.settings.translation_model == "custom-translation-model"
         assert settings_service.settings.translation_target_language == "Japanese"
+        assert ".translated.srt/.vtt/.txt" in window.task_note.text()
+    finally:
+        window.close()
+
+
+def test_task_note_tracks_output_language_and_translation(monkeypatch, qapp) -> None:
+    monkeypatch.setattr(MainWindow, "refresh_diagnostics", lambda self: None)
+    monkeypatch.setattr(main_window_module, "HistoryService", FakeHistoryService)
+
+    window = MainWindow(settings_service=FakeSettingsService(), logger=logging.getLogger("test"))
+
+    try:
+        window.output_language_combo.setCurrentText("Original")
+        window.translation_target_language_edit.clear()
+        window._update_task_note()
+        assert "Whisper transcribe mode" in window.task_note.text()
+
+        window.output_language_combo.setCurrentText("English (Translate)")
+        window._update_task_note()
+        assert "Whisper translate mode" in window.task_note.text()
+
+        window.translation_target_language_edit.setText("Japanese")
+        window._update_task_note()
+        assert "translated subtitle sidecars" in window.task_note.text()
     finally:
         window.close()

@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from whisper_turbo_desktop import __version__
 from whisper_turbo_desktop.models.history import HistoryRecord
 from whisper_turbo_desktop.models.queue_task import QueueTask
 from whisper_turbo_desktop.models.transcription import SUPPORTED_MODELS, TranscriptionRequest
@@ -43,7 +44,7 @@ from whisper_turbo_desktop.services.whisper_runner import (
     TranscriptionResult,
     TranscriptionWorker,
 )
-from whisper_turbo_desktop.utils.runtime import local_whisper_cache_dir
+from whisper_turbo_desktop.utils.runtime import install_root_dir, local_whisper_cache_dir
 
 OUTPUT_LANGUAGE_TO_TASK = {
     "Original": "transcribe",
@@ -95,6 +96,7 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         central_widget = QWidget(self)
         central_layout = QVBoxLayout(central_widget)
+        central_layout.addWidget(self._build_top_bar())
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._build_task_panel())
         splitter.addWidget(self._build_right_panel())
@@ -107,6 +109,26 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.progress_detail_label.setText("No task is running")
         self.cancel_button.setEnabled(False)
+
+    def _build_top_bar(self) -> QWidget:
+        bar = QWidget()
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(0, 0, 0, 8)
+
+        title_label = QLabel(f"Whisper Turbo Desktop {__version__}")
+        title_label.setStyleSheet("font-weight: 600; font-size: 16px;")
+        self.install_path_label = QLabel("")
+        self.install_path_label.setStyleSheet("color: #475569;")
+        self.install_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        self.open_install_button = QPushButton("Open Install Folder")
+        self.top_refresh_button = QPushButton("Refresh Diagnostics")
+
+        layout.addWidget(title_label)
+        layout.addWidget(self.install_path_label, stretch=1)
+        layout.addWidget(self.open_install_button)
+        layout.addWidget(self.top_refresh_button)
+        return bar
 
     def _build_task_panel(self) -> QWidget:
         panel = QWidget()
@@ -295,6 +317,8 @@ class MainWindow(QMainWindow):
         self.cancel_button.clicked.connect(self.cancel_task)
         self.open_output_button.clicked.connect(self.open_output_directory)
         self.refresh_button.clicked.connect(self.refresh_diagnostics)
+        self.top_refresh_button.clicked.connect(self.refresh_diagnostics)
+        self.open_install_button.clicked.connect(self.open_install_directory)
         self.remove_queue_item_button.clicked.connect(self.remove_selected_queue_item)
         self.clear_queue_button.clicked.connect(self.clear_queue)
         self.output_files_list.itemClicked.connect(self.preview_selected_file)
@@ -305,6 +329,7 @@ class MainWindow(QMainWindow):
         self.history_list.itemDoubleClicked.connect(self.open_history_record_target)
         self.output_language_combo.currentTextChanged.connect(self._update_task_note)
         self.model_combo.currentTextChanged.connect(self._update_task_note)
+        self.translation_target_language_edit.textChanged.connect(self._update_task_note)
 
     def _load_settings(self) -> None:
         output_dir = self.settings.default_output_dir or str(Path.home() / "Documents" / "Whisper Outputs")
@@ -314,7 +339,9 @@ class MainWindow(QMainWindow):
         self.translation_base_url_edit.setText(self.settings.translation_base_url)
         self.translation_model_edit.setText(self.settings.translation_model)
         self.translation_target_language_edit.setText(self.settings.translation_target_language)
-        self.runtime_path_edit.setText(sys.executable)
+        install_path = str(install_root_dir())
+        self.install_path_label.setText(install_path)
+        self.runtime_path_edit.setText(install_path)
         self._set_combo_value(self.model_combo, self.settings.default_model)
         self._set_combo_value(self.output_language_combo, self.settings.default_output_language)
         self._set_combo_value(self.device_combo, self.settings.default_device)
@@ -407,6 +434,7 @@ class MainWindow(QMainWindow):
 
         self.diagnostics_text.setPlainText("Running diagnostics...")
         self.refresh_button.setEnabled(False)
+        self.top_refresh_button.setEnabled(False)
         self.diagnostics_worker = DiagnosticsWorker(self.diagnostics_service, sys.executable)
         self.diagnostics_worker.finished_success.connect(self._on_diagnostics_finished)
         self.diagnostics_worker.failed.connect(self._on_diagnostics_failed)
@@ -422,6 +450,7 @@ class MainWindow(QMainWindow):
 
     def _on_diagnostics_worker_finished(self) -> None:
         self.refresh_button.setEnabled(not self._is_worker_running())
+        self.top_refresh_button.setEnabled(not self._is_worker_running())
 
     def start_task(self) -> None:
         try:
@@ -597,6 +626,9 @@ class MainWindow(QMainWindow):
             return
         self._open_path(Path(output_dir))
 
+    def open_install_directory(self) -> None:
+        self._open_path(install_root_dir())
+
     def remove_selected_queue_item(self) -> None:
         item = self.queue_list.currentItem()
         if item is None:
@@ -729,6 +761,7 @@ class MainWindow(QMainWindow):
         self.start_queue_button.setEnabled(not running)
         self.cancel_button.setEnabled(running)
         self.refresh_button.setEnabled(not running and not self._is_diagnostics_running())
+        self.top_refresh_button.setEnabled(not running and not self._is_diagnostics_running())
         self.remove_queue_item_button.setEnabled(not running)
         self.clear_queue_button.setEnabled(not running)
         if not running and self.progress_bar.value() < 100:
@@ -743,14 +776,24 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Warning", message)
 
     def _update_task_note(self) -> None:
+        model = self.model_combo.currentText()
+        translation_target = self.translation_target_language_edit.text().strip()
         if self.output_language_combo.currentText() == "English (Translate)":
-            self.task_note.setText(
-                "English (Translate) uses Whisper translate mode. The turbo model will be downloaded on first use if it is not already cached."
+            parts = [
+                f"English (Translate) uses Whisper translate mode with the {model} model.",
+                "The model will be downloaded on first use if it is not already cached.",
+            ]
+        else:
+            parts = [
+                f"Original output keeps the spoken language and uses Whisper transcribe mode with the {model} model.",
+                "The model will be downloaded on first use if needed.",
+            ]
+        if translation_target:
+            parts.append(
+                f"Translation target {translation_target} is enabled; translated subtitle sidecars "
+                "(.translated.srt/.vtt/.txt) will be written next to the normal outputs."
             )
-            return
-        self.task_note.setText(
-            "Original output keeps the spoken language and uses Whisper transcribe mode. The model will be downloaded on first use if needed."
-        )
+        self.task_note.setText(" ".join(parts))
 
     def _apply_input_file(self, file_path: Path) -> None:
         self.input_path_edit.setText(str(file_path))
