@@ -139,10 +139,12 @@ def test_translate_segments_includes_full_transcript_context(
         {
             "index": 1,
             "text": "The first thought",
+            "source_quality": "normal",
         },
         {
             "index": 2,
             "text": "continues here",
+            "source_quality": "normal",
         },
     ]
 
@@ -422,6 +424,178 @@ def test_translate_segments_retries_invalid_model_output_then_succeeds(
     assert result.txt_text == "修正后的字幕"
     assert "Previous response failed validation" in calls[1]["messages"][0]["content"]
     assert "invalid replacement characters" in calls[1]["messages"][0]["content"]
+
+
+def test_translate_segments_retries_literal_chinese_grammar_fragment_translation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_urlopen(request, timeout=0):
+        body = json.loads(request.data.decode("utf-8"))
+        calls.append(body)
+        if len(calls) == 1:
+            text = "本来可以，本来会，没有，女士，曾经。"
+        else:
+            text = "少来这些语法梗。"
+        return _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {"translations": [{"index": 1, "text": text}]}
+                            )
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    service = SubtitleTranslationService(
+        api_key="sk-test",
+        base_url="https://api.example.com/v1",
+        model="gpt-4o-mini",
+        target_language="Chinese",
+        source_language="English",
+    )
+
+    result = service.translate_segments(
+        [
+            SubtitleSegment(
+                index=1,
+                start=0.0,
+                end=2.0,
+                text="Should've, would've, hadn't, ma'am, twas.",
+            )
+        ]
+    )
+
+    assert len(calls) == 2
+    assert result.txt_text == "少来这些语法梗。"
+    assert "overly literal" in calls[1]["messages"][0]["content"]
+
+
+def test_translate_segments_marks_low_confidence_asr_source_for_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_urlopen(request, timeout=0):
+        body = json.loads(request.data.decode("utf-8"))
+        calls.append(body)
+        return _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "translations": [
+                                        {"index": 1, "text": "（听不清）"},
+                                        {"index": 2, "text": "这是清楚的一句。"},
+                                    ]
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    service = SubtitleTranslationService(
+        api_key="sk-test",
+        base_url="https://api.example.com/v1",
+        model="gpt-4o-mini",
+        target_language="Chinese",
+        source_language="English",
+    )
+
+    result = service.translate_segments(
+        [
+            SubtitleSegment(
+                index=1,
+                start=0.0,
+                end=2.0,
+                text="Nan' Jag'i'mo Here tskii.",
+            ),
+            SubtitleSegment(
+                index=2,
+                start=2.0,
+                end=4.0,
+                text="This is a clear sentence.",
+            ),
+        ]
+    )
+
+    user_payload = json.loads(calls[0]["messages"][1]["content"])
+    system_prompt = calls[0]["messages"][0]["content"]
+
+    assert result.segments[0].text == "（听不清）"
+    assert user_payload["segments"][0]["source_quality"] == "low_confidence_asr"
+    assert user_payload["segments"][0]["translation_guidance"] == (
+        "Use context to repair this likely ASR error; if still unclear, "
+        "translate as an unclear-audio marker."
+    )
+    assert user_payload["segments"][1]["source_quality"] == "normal"
+    assert "low_confidence_asr" in system_prompt
+    assert "unclear-audio marker" in system_prompt
+
+
+def test_translate_segments_retries_noisy_source_phonetic_japanese_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_urlopen(request, timeout=0):
+        body = json.loads(request.data.decode("utf-8"))
+        calls.append(body)
+        if len(calls) == 1:
+            text = "ナン・ジャグイモ・ヒア・ツキー。"
+        else:
+            text = "（聞き取れません）"
+        return _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {"translations": [{"index": 1, "text": text}]}
+                            )
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    service = SubtitleTranslationService(
+        api_key="sk-test",
+        base_url="https://api.example.com/v1",
+        model="gpt-4o-mini",
+        target_language="Japanese",
+        source_language="English",
+    )
+
+    result = service.translate_segments(
+        [
+            SubtitleSegment(
+                index=1,
+                start=0.0,
+                end=2.0,
+                text="Nan' Jag'i'mo Here tskii.",
+            )
+        ]
+    )
+
+    assert len(calls) == 2
+    assert result.txt_text == "（聞き取れません）"
+    assert "phonetic" in calls[1]["messages"][0]["content"]
 
 
 def test_translate_segments_retries_chinese_output_that_stays_in_source_language(

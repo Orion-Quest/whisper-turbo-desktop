@@ -20,6 +20,16 @@ TRANSLATION_REQUEST_RETRY_DELAYS_SECONDS = (0.4, 1.2)
 TRANSLATION_MODEL_OUTPUT_ATTEMPTS = 2
 TIMESTAMP_PATTERN = re.compile(r"\b\d{2}:\d{2}:\d{2}[,.]\d{3}\b")
 URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
+LATIN_WORD_PATTERN = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ]+(?:'[A-Za-zÀ-ÖØ-öø-ÿ]+)*")
+COMMON_ENGLISH_CONTRACTION_PATTERN = re.compile(
+    r"(?i)^(?:[a-z]+(?:n't|'(?:ll|re|ve|d|m|s))|ma'am|o'clock|twas|y'all)$"
+)
+LOW_CONFIDENCE_ASR_QUALITY = "low_confidence_asr"
+NORMAL_SOURCE_QUALITY = "normal"
+LOW_CONFIDENCE_ASR_GUIDANCE = (
+    "Use context to repair this likely ASR error; if still unclear, "
+    "translate as an unclear-audio marker."
+)
 TRANSIENT_REQUEST_EXCEPTIONS = (
     error.URLError,
     TimeoutError,
@@ -240,7 +250,15 @@ class SubtitleTranslationService:
                         "in the same order, using the same index values. "
                         "Use the full transcript context only to understand surrounding meaning; "
                         "translate only the segment text values. "
-                        "Use natural subtitle wording in the target language, not word-by-word output. "
+                        "Use natural localized dialogue subtitle wording, not word-by-word output. "
+                        "Preserve speaker intent, jokes, register, and short subtitle rhythm. "
+                        "The source may contain Whisper ASR mistakes. Use context to repair obvious "
+                        "recognition errors before translating. Segments marked "
+                        "source_quality=low_confidence_asr are likely garbled; if the meaning is still "
+                        "unclear, output a concise target-language unclear-audio marker instead of "
+                        "phonetic transliteration or literal nonsense. "
+                        "Do not translate English contraction or grammar fragments literally; localize "
+                        "their function in the dialogue. "
                         "Translate ordinary source-language words; keep only unavoidable proper names, "
                         "brand names, filenames, URLs, or technical tokens untranslated. "
                         "Do not output mojibake, invalid replacement characters, mixed-script garbage, "
@@ -256,6 +274,7 @@ class SubtitleTranslationService:
                         {
                             "target_language": self.target_language,
                             "source_language": self.source_language or "auto",
+                            "unclear_audio_marker": self._unclear_audio_marker(),
                             "full_transcript": self._build_context_transcript(
                                 all_segments, start_index, len(batch)
                             ),
@@ -520,12 +539,16 @@ class SubtitleTranslationService:
         )
         return cleaned
 
-    @staticmethod
-    def _format_segment_payload(segment: SubtitleSegment) -> dict[str, Any]:
-        return {
+    def _format_segment_payload(self, segment: SubtitleSegment) -> dict[str, Any]:
+        source_quality = self._source_text_quality(segment.text)
+        payload = {
             "index": segment.index,
             "text": segment.text,
+            "source_quality": source_quality,
         }
+        if source_quality == LOW_CONFIDENCE_ASR_QUALITY:
+            payload["translation_guidance"] = LOW_CONFIDENCE_ASR_GUIDANCE
+        return payload
 
     @staticmethod
     def _build_full_transcript(segments: list[SubtitleSegment]) -> str:
@@ -625,7 +648,33 @@ class SubtitleTranslationService:
                 f"translation response item {position} contains an unexpected URL"
             )
 
+        self._validate_semantic_translation_quality(
+            translated_text, source_text=source_text, position=position
+        )
         self._validate_target_script_quality(translated_text, position=position)
+
+    def _validate_semantic_translation_quality(
+        self, translated_text: str, *, source_text: str, position: int
+    ) -> None:
+        if (
+            self._target_script_profile() == "chinese"
+            and self._is_english_contraction_drill(source_text)
+            and self._looks_like_literal_chinese_grammar_translation(translated_text)
+        ):
+            raise SubtitleTranslationError(
+                f"translation response item {position} is an overly literal "
+                "translation of an English grammar fragment"
+            )
+
+        if (
+            self._source_text_quality(source_text) == LOW_CONFIDENCE_ASR_QUALITY
+            and self._looks_like_phonetic_output_for_noisy_source(translated_text)
+        ):
+            raise SubtitleTranslationError(
+                f"translation response item {position} appears to be phonetic "
+                "transliteration of low-confidence ASR instead of a translation "
+                "or unclear-audio marker"
+            )
 
     def _validate_target_script_quality(
         self, translated_text: str, *, position: int
@@ -680,6 +729,126 @@ class SubtitleTranslationService:
         ):
             return "korean"
         return ""
+
+    def _unclear_audio_marker(self) -> str:
+        profile = self._target_script_profile()
+        if profile == "chinese":
+            return "（听不清）"
+        if profile == "japanese":
+            return "（聞き取れません）"
+        if profile == "korean":
+            return "(잘 들리지 않음)"
+        return "[unclear audio]"
+
+    @staticmethod
+    def _is_english_contraction_drill(source_text: str) -> bool:
+        normalized = source_text.casefold()
+        required_tokens = ("should've", "would've", "hadn't", "ma'am", "twas")
+        return sum(token in normalized for token in required_tokens) >= 3
+
+    @staticmethod
+    def _looks_like_literal_chinese_grammar_translation(translated_text: str) -> bool:
+        literal_terms = (
+            "本来可以",
+            "本可以",
+            "本来会",
+            "本会",
+            "没有",
+            "女士",
+            "曾经",
+            "从前",
+        )
+        return sum(term in translated_text for term in literal_terms) >= 2
+
+    def _source_text_quality(self, source_text: str) -> str:
+        text = source_text.strip()
+        if not text:
+            return LOW_CONFIDENCE_ASR_QUALITY
+        if "\ufffd" in text:
+            return LOW_CONFIDENCE_ASR_QUALITY
+        if self._contains_obvious_mojibake(text):
+            return LOW_CONFIDENCE_ASR_QUALITY
+        if self._looks_like_latin_asr_noise(text):
+            return LOW_CONFIDENCE_ASR_QUALITY
+        return NORMAL_SOURCE_QUALITY
+
+    @staticmethod
+    def _contains_obvious_mojibake(text: str) -> bool:
+        mojibake_markers = ("Ã", "Â", "ð", "�")
+        return any(marker in text for marker in mojibake_markers)
+
+    def _looks_like_latin_asr_noise(self, text: str) -> bool:
+        if not self._source_allows_latin_noise_checks():
+            return False
+
+        words = LATIN_WORD_PATTERN.findall(text)
+        if len(words) < 2:
+            return False
+
+        suspicious_words = sum(
+            1 for word in words if self._is_suspicious_latin_asr_word(word)
+        )
+        return suspicious_words >= 2
+
+    def _source_allows_latin_noise_checks(self) -> bool:
+        normalized = self.source_language.casefold()
+        if not normalized:
+            return True
+        latin_language_names = (
+            "english",
+            "spanish",
+            "french",
+            "german",
+            "italian",
+            "portuguese",
+        )
+        latin_language_codes = {"en", "es", "fr", "de", "it", "pt"}
+        return normalized in latin_language_codes or any(
+            name in normalized for name in latin_language_names
+        )
+
+    @classmethod
+    def _is_suspicious_latin_asr_word(cls, word: str) -> bool:
+        normalized = word.casefold().strip("'")
+        if not normalized:
+            return False
+
+        if "'" in word and not COMMON_ENGLISH_CONTRACTION_PATTERN.match(normalized):
+            if word.endswith("'") or word.count("'") >= 2:
+                return True
+
+        has_non_ascii_latin = any(ord(character) > 127 for character in normalized)
+        if has_non_ascii_latin:
+            return True
+
+        ascii_letters = re.sub(r"[^a-z]", "", normalized)
+        if len(ascii_letters) < 4:
+            return False
+        has_repeated_consonant_cluster = bool(
+            re.search(
+                r"([bcdfghjklmnpqrstvwxyz])\1[bcdfghjklmnpqrstvwxyz]",
+                ascii_letters,
+            )
+        )
+        has_suspicious_terminal = bool(
+            re.search(r"[bcdfghjklmnpqrstvwxyz]{3}[iy]{2}$", ascii_letters)
+        )
+        return len(ascii_letters) <= 7 and (
+            has_repeated_consonant_cluster or has_suspicious_terminal
+        )
+
+    def _looks_like_phonetic_output_for_noisy_source(self, translated_text: str) -> bool:
+        if self._unclear_audio_marker() in translated_text:
+            return False
+
+        profile = self._target_script_profile()
+        if profile == "japanese":
+            kana_count = self._count_kana_script(translated_text)
+            cjk_count = self._count_cjk_unified(translated_text)
+            return kana_count >= 6 and kana_count > max(cjk_count * 2, 4) and (
+                "・" in translated_text or cjk_count == 0
+            )
+        return False
 
     def _validate_chinese_translation_quality(
         self, translated_text: str, *, position: int
