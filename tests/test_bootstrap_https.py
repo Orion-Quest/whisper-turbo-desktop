@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -30,3 +31,9 @@ def test_select_download_backend_reports_missing_https_support(
 
     with pytest.raises(RuntimeError, match="HTTPS downloads are unavailable"):
         app.select_download_backend()
+
+
+def test_install_root_dir_uses_local_appdata(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\tester\AppData\Local")
+
+    assert app.install_root_dir() == Path(r"C:\Users\tester\AppData\Local\Programs\WhisperTurboDesktop")
