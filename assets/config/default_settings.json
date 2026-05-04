@@ -5,5 +5,9 @@
   "default_output_language": "Original",
   "default_source_language": "",
   "default_device": "auto",
-  "default_output_format": "srt"
+  "default_output_format": "srt",
+  "translation_api_key": "",
+  "translation_base_url": "https://api.openai.com/v1",
+  "translation_model": "gpt-4o-mini",
+  "translation_target_language": ""
 }
