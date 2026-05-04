@@ -11,6 +11,10 @@ from PySide6.QtCore import QThread, Signal
 from whisper.utils import get_writer
 
 from whisper_turbo_desktop.models.transcription import TranscriptionRequest
+from whisper_turbo_desktop.services.translation_service import (
+    SubtitleTranslationService,
+    SubtitleSegment,
+)
 from whisper_turbo_desktop.utils.runtime import is_model_cached, local_whisper_cache_dir, resolve_model_source
 
 
@@ -94,6 +98,7 @@ class TranscriptionWorker(QThread):
         ProgressBridge.cancel_callback = lambda: self._cancel_requested
 
         try:
+            self.request.validate()
             self.request.output_dir.mkdir(parents=True, exist_ok=True)
             model_source = resolve_model_source(self.request.model)
             device = self._resolve_device()
@@ -133,6 +138,8 @@ class TranscriptionWorker(QThread):
             self.state_changed.emit("Writing output files...")
             writer = get_writer(self.request.output_format, str(self.request.output_dir))
             writer(result, str(self.request.input_path))
+
+            self._write_translated_outputs(result)
 
             output_files = self.request.collect_output_files()
             if not output_files:
@@ -176,3 +183,33 @@ class TranscriptionWorker(QThread):
         if self.request.device == "auto":
             return "cuda" if torch.cuda.is_available() else "cpu"
         return self.request.device
+
+    def _write_translated_outputs(self, result: dict) -> None:
+        if not self.request.translation_enabled:
+            return
+        segments = [
+            SubtitleSegment(
+                index=index + 1,
+                start=float(segment["start"]),
+                end=float(segment["end"]),
+                text=str(segment["text"]),
+            )
+            for index, segment in enumerate(result.get("segments", []))
+        ]
+        if not segments:
+            return
+
+        translator = SubtitleTranslationService(
+            api_key=self.request.translation_api_key,
+            base_url=self.request.translation_base_url,
+            model=self.request.translation_model,
+            target_language=self.request.translation_target_language,
+        )
+        translated = translator.translate_segments(segments)
+        stem = self.request.input_path.stem
+        srt_path = self.request.output_dir / f"{stem}.translated.srt"
+        vtt_path = self.request.output_dir / f"{stem}.translated.vtt"
+        txt_path = self.request.output_dir / f"{stem}.translated.txt"
+        srt_path.write_text(translated.srt_text, encoding="utf-8")
+        vtt_path.write_text(translated.vtt_text, encoding="utf-8")
+        txt_path.write_text(translated.txt_text, encoding="utf-8")
