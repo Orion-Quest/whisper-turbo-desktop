@@ -8,20 +8,30 @@ The project now uses a two-stage release model:
 - On first launch, the bootstrap downloads the runtime package and `ffmpeg`
 - On first actual transcription, Whisper downloads the `turbo` model if it is not already cached
 
+## Download And Install
+
+For normal Windows use, download only:
+
+- `WhisperTurboDesktop-Bootstrap-Setup-<version>.exe`
+
+from the GitHub Release page. Run that installer, then launch `Whisper Turbo Desktop`. The bootstrap launcher downloads the matching runtime and managed `ffmpeg` payload automatically on first launch.
+
+The runtime ZIP, runtime `.part###` files, `ffmpeg` ZIP, manifest, and checksums are release support assets used by the bootstrap launcher. If a runtime ZIP is split into parts, every generated part must stay uploaded under the same release tag because the manifest references them by exact filename, size, and SHA-256 hash.
+
 ## Features
 
 - Single-run workflow for one audio/video file
 - Batch queue for multiple files with sequential processing
 - Drag-and-drop import with active drop feedback
-- `Spoken Language` input plus `Whisper Mode` selection
+- Editable `Spoken Language` and `Extra Subtitle Language` selectors with common language suggestions
 - `Whisper Mode = Original` maps to Whisper `transcribe`
 - `Whisper Mode = English (Translate)` maps to Whisper `translate`
 - Optional OpenAI-compatible subtitle translation to non-English target languages
 - Custom translation API key, endpoint, and model settings
 - Selectable glass/light desktop themes with a gradient progress bar
-- Real progress display during transcription
+- Stage-aware progress display for model loading, Whisper, output writing, and API subtitle translation
 - Runtime model download on first use
-- History view with double-click open for output file or folder
+- History view with separated time/status/file fields and double-click open for output file or folder
 - Output preview for `txt`, `srt`, `vtt`, `json`, and `tsv`
 - Runtime checks for managed `ffmpeg`, `whisper`, `torch`, `CUDA`, and model cache state
 
@@ -35,6 +45,8 @@ The installed bootstrap launcher downloads:
 - the managed `ffmpeg` payload
 
 into the local application install directory.
+
+If the launcher is run directly from a download folder, the runtime is installed under `%LOCALAPPDATA%\\Programs\\WhisperTurboDesktop` instead of beside the downloaded `.exe`. Completed downloads are cached and reused after size/hash validation; incomplete downloads are written as temporary `.download` files and are only promoted after the transfer finishes.
 
 ### First Transcription
 
@@ -103,7 +115,7 @@ whisper-turbo-desktop
 
 The left control rail is for setup and actions: input/output paths, Whisper mode, optional API subtitle translation, queue buttons, and progress. The right workspace is for diagnostics, output files, preview, logs, queue details, and history.
 
-The top bar includes a `Theme` selector with `Aurora Glass`, `Slate Glass`, and `Clean Light`. The theme choice is saved with the rest of the app settings.
+The top bar includes a clickable `Open Output Folder` chip with the current output path, a `Theme` selector with `Aurora Glass`, `Slate Glass`, `Graphite Prism`, and `Clean Light`, plus diagnostics refresh. The theme choice is saved with the rest of the app settings.
 
 ### Optional API Subtitle Translation
 
@@ -111,7 +123,7 @@ The top bar includes a `Theme` selector with `Aurora Glass`, `Slate Glass`, and 
 
 To prepare the optional OpenAI-compatible subtitle translation path, fill in `Optional API Subtitle Translation`:
 
-- `Extra Subtitle Language`: desired subtitle language, such as `Spanish` or `Japanese`
+- `Extra Subtitle Language`: desired subtitle language, such as `Spanish` or `Japanese`; choose a suggestion or type a custom target
 - `API Key for Subtitles`: provider key
 - `API Endpoint`: OpenAI-compatible API root such as `https://api.openai.com/v1`, or a full `.../chat/completions` endpoint
 - `API Translation Model`: translation model name, for example `gpt-4o-mini`
@@ -126,6 +138,8 @@ These values are saved with the rest of the app settings and applied to new runs
 
 Long subtitle jobs are translated in batches and stitched back together by subtitle index. The app requests strict JSON from providers that support it and automatically retries without that JSON-mode parameter for OpenAI-compatible endpoints that reject it.
 Transient TLS, timeout, and remote disconnect errors are retried with short backoff before showing a diagnostic message that points to endpoint, proxy/VPN, network, or provider status.
+Model output is also validated for subtitle structure and obvious target-script mistakes. For Chinese, Japanese, and Korean targets, the app retries once when the model returns malformed JSON, source-language leftovers, mixed-script junk, invalid replacement characters, unexpected timestamps/URLs, overly literal contraction-drill translations, or phonetic output for garbled ASR text.
+Likely low-confidence Whisper text is marked in the API payload so the provider can use surrounding context to repair the line; if the meaning is still unclear, the model is instructed to output a short target-language unclear-audio marker instead of inventing a literal translation.
 
 ### Batch Queue
 
@@ -139,6 +153,7 @@ Transient TLS, timeout, and remote disconnect errors are retried with short back
 
 - Completed, failed, and cancelled runs are written to:
   - `%APPDATA%\\WhisperTurboDesktop\\history.json`
+- History rows visually separate run time, completed/failed/cancelled status, duration, task/model, and input filename.
 - Double-click a history item to open the first available output file.
 - If the output file is missing, the app opens the recorded output folder instead.
 

@@ -1,6 +1,6 @@
 ## Whisper Turbo Desktop {{VERSION}}
 
-Windows desktop app for local Whisper transcription and English translation.
+Windows desktop app for local Whisper transcription, Whisper English translation, and optional OpenAI-compatible subtitle translation to non-English targets.
 
 ### Release Assets
 
@@ -22,6 +22,7 @@ Windows desktop app for local Whisper transcription and English translation.
   - the runtime payload
   - the managed `ffmpeg` payload
 - On first actual transcription, Whisper downloads the `turbo` model if it is not already cached
+- If the runtime ZIP is split into parts, publish every generated `.part###` file under this same tag
 
 ### Installation
 
@@ -32,8 +33,17 @@ Windows desktop app for local Whisper transcription and English translation.
 
 ### First Run Notes
 
-- `Output Language = Original` keeps the spoken language
-- `Output Language = English (Translate)` outputs English text
+- `Whisper Mode = Original` keeps the spoken language
+- `Whisper Mode = English (Translate)` outputs English text
+- Optional API subtitle translation writes `.translated.srt`, `.translated.vtt`, and `.translated.txt` sidecars
+- OpenAI-compatible API endpoints can be configured with a custom key, endpoint, and model
+
+### Notable Changes
+
+- Improved desktop layout, selectable glass themes, and gradient progress feedback
+- Added clearer output-folder affordance, history rows, and translation setup status
+- Hardened bootstrap download caching, checksum validation, and direct-download install paths
+- Improved API subtitle translation with strict JSON handling, transient network retries, target-script validation, low-confidence ASR guidance, and retries for obvious literal or phonetic bad model output
 - The first transcription may still require network access if the Whisper model is not cached
 
 ### Checksums
