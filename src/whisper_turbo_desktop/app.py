@@ -47,6 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(qt_argv)
     app.setApplicationName("Whisper Turbo Desktop")
     app.setOrganizationName("mc_leafwave")
+    _apply_desktop_style(app)
 
     instance_guard = SingleInstanceGuard()
     if instance_guard.already_running():
@@ -60,3 +61,7 @@ def main(argv: list[str] | None = None) -> int:
     window = MainWindow(settings_service=settings_service, logger=logger)
     window.show()
     return app.exec()
+
+
+def _apply_desktop_style(app: QApplication) -> None:
+    app.setStyle("Fusion")

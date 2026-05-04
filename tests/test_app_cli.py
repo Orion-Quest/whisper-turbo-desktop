@@ -38,6 +38,9 @@ def test_second_instance_returns_without_creating_main_window(monkeypatch) -> No
         def setOrganizationName(self, _name):
             pass
 
+        def setStyle(self, _style_name):
+            pass
+
     class LockedInstanceGuard:
         def already_running(self) -> bool:
             return True
@@ -50,3 +53,43 @@ def test_second_instance_returns_without_creating_main_window(monkeypatch) -> No
     monkeypatch.setattr(app_module, "MainWindow", fail_main_window)
 
     assert app_module.main([]) == 0
+
+
+def test_main_applies_fusion_desktop_style(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+
+    class FakeApplication:
+        def __init__(self, _argv):
+            pass
+
+        def setApplicationName(self, _name):
+            pass
+
+        def setOrganizationName(self, _name):
+            pass
+
+        def setStyle(self, style_name):
+            calls["style"] = style_name
+
+        def exec(self):
+            return 0
+
+    class UnlockedInstanceGuard:
+        def already_running(self) -> bool:
+            return False
+
+    class FakeWindow:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def show(self):
+            calls["shown"] = True
+
+    monkeypatch.setattr(app_module, "QApplication", FakeApplication)
+    monkeypatch.setattr(app_module, "SingleInstanceGuard", lambda: UnlockedInstanceGuard())
+    monkeypatch.setattr(app_module, "MainWindow", FakeWindow)
+
+    assert app_module.main([]) == 0
+
+    assert calls["style"] == "Fusion"
+    assert calls["shown"] is True

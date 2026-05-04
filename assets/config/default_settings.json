@@ -9,5 +9,6 @@
   "translation_api_key": "",
   "translation_base_url": "https://api.openai.com/v1",
   "translation_model": "gpt-4o-mini",
-  "translation_target_language": ""
+  "translation_target_language": "",
+  "theme": "Aurora Glass"
 }

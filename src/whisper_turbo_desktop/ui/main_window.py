@@ -4,15 +4,17 @@ import logging
 import os
 import sys
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QDragEnterEvent, QDropEvent
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QTimer, Qt
+from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -25,6 +27,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QFrame,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QTabWidget,
@@ -65,6 +69,495 @@ SUPPORTED_MEDIA_SUFFIXES = {
 }
 
 
+WINDOW_INITIAL_WIDTH = 1280
+WINDOW_INITIAL_HEIGHT = 800
+WINDOW_MINIMUM_WIDTH = 1020
+WINDOW_MINIMUM_HEIGHT = 660
+TASK_PANEL_INITIAL_WIDTH = 560
+TASK_PANEL_MINIMUM_WIDTH = 520
+TASK_PANEL_MAXIMUM_WIDTH = 640
+RIGHT_PANEL_INITIAL_WIDTH = WINDOW_INITIAL_WIDTH - TASK_PANEL_INITIAL_WIDTH
+
+THEME_NAMES = ["Aurora Glass", "Slate Glass", "Clean Light"]
+
+
+@dataclass(frozen=True, slots=True)
+class ThemeDefinition:
+    app_style: str
+    progress_style: str
+    title_style: str
+    muted_text_style: str
+    guidance_card_style: str
+    drop_hint_text_style: str
+    note_text_style: str
+    runtime_hint_text_style: str
+    status_text_style: str
+    progress_detail_style: str
+
+
+AURORA_APP_STYLE = """
+QMainWindow,
+QWidget {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #101820, stop:0.48 #182433, stop:1 #10221f);
+    color: #edf5f4;
+    font-size: 12px;
+}
+
+QWidget#TaskRailContent,
+QWidget#TopBar {
+    background: transparent;
+}
+
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+QGroupBox {
+    background-color: rgba(24, 34, 48, 224);
+    border: 1px solid rgba(166, 224, 217, 72);
+    border-radius: 8px;
+    font-weight: 600;
+    margin-top: 10px;
+    padding: 9px 9px 7px 9px;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: #f3faf9;
+    background-color: transparent;
+}
+
+QLineEdit,
+QComboBox,
+QListWidget,
+QPlainTextEdit {
+    background-color: rgba(8, 14, 22, 174);
+    border: 1px solid rgba(187, 216, 228, 82);
+    border-radius: 6px;
+    color: #f0f7f6;
+    padding: 4px 6px;
+    selection-background-color: rgba(91, 205, 175, 150);
+}
+
+QLineEdit:read-only {
+    background-color: rgba(255, 255, 255, 26);
+    color: #b9c9cb;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #172333;
+    color: #f0f7f6;
+    border: 1px solid rgba(187, 216, 228, 92);
+    selection-background-color: #2d766d;
+}
+
+QPushButton {
+    background-color: rgba(255, 255, 255, 34);
+    border: 1px solid rgba(202, 228, 235, 78);
+    border-radius: 6px;
+    color: #f2f8f7;
+    min-height: 22px;
+    padding: 4px 10px;
+}
+
+QPushButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(65, 197, 168, 96), stop:1 rgba(95, 144, 224, 96));
+}
+
+QPushButton:pressed {
+    background-color: rgba(60, 164, 149, 118);
+}
+
+QPushButton:disabled {
+    background-color: rgba(255, 255, 255, 18);
+    border-color: rgba(180, 196, 202, 42);
+    color: #809096;
+}
+
+QTabWidget::pane {
+    background-color: rgba(19, 28, 40, 218);
+    border: 1px solid rgba(166, 224, 217, 72);
+    border-radius: 8px;
+}
+
+QTabBar::tab {
+    background-color: rgba(255, 255, 255, 28);
+    border: 1px solid rgba(166, 224, 217, 58);
+    border-bottom: none;
+    color: #b9c9cb;
+    padding: 6px 12px;
+}
+
+QTabBar::tab:selected {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(53, 171, 150, 112), stop:1 rgba(79, 120, 196, 102));
+    color: #f7fffd;
+}
+
+QSplitter::handle {
+    background-color: rgba(166, 224, 217, 42);
+}
+"""
+
+
+SLATE_APP_STYLE = """
+QMainWindow,
+QWidget {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #101319, stop:0.46 #1a2230, stop:1 #242033);
+    color: #eef2f7;
+    font-size: 12px;
+}
+
+QWidget#TaskRailContent,
+QWidget#TopBar {
+    background: transparent;
+}
+
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+QGroupBox {
+    background-color: rgba(30, 37, 50, 226);
+    border: 1px solid rgba(203, 213, 225, 68);
+    border-radius: 8px;
+    font-weight: 600;
+    margin-top: 10px;
+    padding: 9px 9px 7px 9px;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: #f8fafc;
+    background-color: transparent;
+}
+
+QLineEdit,
+QComboBox,
+QListWidget,
+QPlainTextEdit {
+    background-color: rgba(10, 15, 23, 182);
+    border: 1px solid rgba(197, 210, 230, 78);
+    border-radius: 6px;
+    color: #f8fafc;
+    padding: 4px 6px;
+    selection-background-color: rgba(110, 131, 220, 155);
+}
+
+QLineEdit:read-only {
+    background-color: rgba(255, 255, 255, 24);
+    color: #bec8d6;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #1b2432;
+    color: #f8fafc;
+    border: 1px solid rgba(197, 210, 230, 88);
+    selection-background-color: #5867b8;
+}
+
+QPushButton {
+    background-color: rgba(255, 255, 255, 32);
+    border: 1px solid rgba(209, 218, 233, 72);
+    border-radius: 6px;
+    color: #f8fafc;
+    min-height: 22px;
+    padding: 4px 10px;
+}
+
+QPushButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(99, 142, 214, 95), stop:1 rgba(143, 116, 197, 92));
+}
+
+QPushButton:pressed {
+    background-color: rgba(95, 108, 190, 120);
+}
+
+QPushButton:disabled {
+    background-color: rgba(255, 255, 255, 18);
+    border-color: rgba(180, 190, 205, 42);
+    color: #818b9b;
+}
+
+QTabWidget::pane {
+    background-color: rgba(25, 32, 44, 222);
+    border: 1px solid rgba(203, 213, 225, 68);
+    border-radius: 8px;
+}
+
+QTabBar::tab {
+    background-color: rgba(255, 255, 255, 28);
+    border: 1px solid rgba(203, 213, 225, 52);
+    border-bottom: none;
+    color: #c5cedd;
+    padding: 6px 12px;
+}
+
+QTabBar::tab:selected {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(91, 126, 206, 112), stop:1 rgba(134, 95, 174, 104));
+    color: #ffffff;
+}
+
+QSplitter::handle {
+    background-color: rgba(203, 213, 225, 40);
+}
+"""
+
+
+CLEAN_LIGHT_APP_STYLE = """
+QMainWindow,
+QWidget {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #edf3f6, stop:0.48 #f7f8fb, stop:1 #eef4ef);
+    color: #17212b;
+    font-size: 12px;
+}
+
+QWidget#TaskRailContent,
+QWidget#TopBar {
+    background: transparent;
+}
+
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+QGroupBox {
+    background-color: rgba(255, 255, 255, 232);
+    border: 1px solid rgba(129, 151, 166, 88);
+    border-radius: 8px;
+    font-weight: 600;
+    margin-top: 10px;
+    padding: 9px 9px 7px 9px;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: #24313f;
+    background-color: transparent;
+}
+
+QLineEdit,
+QComboBox,
+QListWidget,
+QPlainTextEdit {
+    background-color: rgba(255, 255, 255, 236);
+    border: 1px solid rgba(124, 145, 160, 112);
+    border-radius: 6px;
+    color: #17212b;
+    padding: 4px 6px;
+    selection-background-color: rgba(87, 160, 142, 120);
+}
+
+QLineEdit:read-only {
+    background-color: rgba(231, 236, 241, 230);
+    color: #556270;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #ffffff;
+    color: #17212b;
+    border: 1px solid rgba(124, 145, 160, 112);
+    selection-background-color: #c9ded7;
+}
+
+QPushButton {
+    background-color: rgba(255, 255, 255, 222);
+    border: 1px solid rgba(116, 136, 152, 118);
+    border-radius: 6px;
+    color: #17212b;
+    min-height: 22px;
+    padding: 4px 10px;
+}
+
+QPushButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(208, 235, 226, 210), stop:1 rgba(219, 228, 246, 210));
+}
+
+QPushButton:pressed {
+    background-color: rgba(195, 218, 211, 224);
+}
+
+QPushButton:disabled {
+    background-color: rgba(235, 239, 243, 220);
+    border-color: rgba(170, 184, 196, 96);
+    color: #8a97a4;
+}
+
+QTabWidget::pane {
+    background-color: rgba(255, 255, 255, 232);
+    border: 1px solid rgba(129, 151, 166, 88);
+    border-radius: 8px;
+}
+
+QTabBar::tab {
+    background-color: rgba(235, 240, 245, 218);
+    border: 1px solid rgba(129, 151, 166, 80);
+    border-bottom: none;
+    color: #485666;
+    padding: 6px 12px;
+}
+
+QTabBar::tab:selected {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 rgba(207, 234, 225, 230), stop:1 rgba(225, 232, 248, 230));
+    color: #17212b;
+}
+
+QSplitter::handle {
+    background-color: rgba(129, 151, 166, 64);
+}
+"""
+
+
+THEMES = {
+    "Aurora Glass": ThemeDefinition(
+        app_style=AURORA_APP_STYLE,
+        progress_style="""
+QProgressBar {
+    background-color: rgba(5, 10, 16, 168);
+    border: 1px solid rgba(166, 224, 217, 86);
+    border-radius: 9px;
+    color: #f4fffb;
+    min-height: 20px;
+    max-height: 22px;
+    text-align: center;
+}
+QProgressBar::chunk {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #44d6b3, stop:0.52 #5c8fde, stop:1 #f0bf6a);
+    border-radius: 7px;
+    margin: 2px;
+}
+""",
+        title_style="font-weight: 700; font-size: 15px; color: #f4fffb;",
+        muted_text_style="color: #a9bec0;",
+        guidance_card_style=(
+            "background-color: rgba(255, 255, 255, 24);"
+            "border: 1px solid rgba(166, 224, 217, 64);"
+            "border-radius: 8px;"
+        ),
+        drop_hint_text_style="color: #d9f1ee;",
+        note_text_style="color: #ffe5ad;",
+        runtime_hint_text_style="color: #c6d7d8;",
+        status_text_style="font-weight: 700; color: #f4fffb;",
+        progress_detail_style="color: #b7cacc;",
+    ),
+    "Slate Glass": ThemeDefinition(
+        app_style=SLATE_APP_STYLE,
+        progress_style="""
+QProgressBar {
+    background-color: rgba(8, 12, 19, 170);
+    border: 1px solid rgba(203, 213, 225, 82);
+    border-radius: 9px;
+    color: #ffffff;
+    min-height: 20px;
+    max-height: 22px;
+    text-align: center;
+}
+QProgressBar::chunk {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #6ca1ff, stop:0.52 #9b7ce7, stop:1 #58d0b5);
+    border-radius: 7px;
+    margin: 2px;
+}
+""",
+        title_style="font-weight: 700; font-size: 15px; color: #ffffff;",
+        muted_text_style="color: #b9c4d3;",
+        guidance_card_style=(
+            "background-color: rgba(255, 255, 255, 22);"
+            "border: 1px solid rgba(203, 213, 225, 58);"
+            "border-radius: 8px;"
+        ),
+        drop_hint_text_style="color: #e2e8f0;",
+        note_text_style="color: #f7d28c;",
+        runtime_hint_text_style="color: #cbd5e1;",
+        status_text_style="font-weight: 700; color: #ffffff;",
+        progress_detail_style="color: #c6ceda;",
+    ),
+    "Clean Light": ThemeDefinition(
+        app_style=CLEAN_LIGHT_APP_STYLE,
+        progress_style="""
+QProgressBar {
+    background-color: rgba(227, 233, 238, 230);
+    border: 1px solid rgba(116, 136, 152, 120);
+    border-radius: 9px;
+    color: #17212b;
+    min-height: 20px;
+    max-height: 22px;
+    text-align: center;
+}
+QProgressBar::chunk {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #31b68f, stop:0.52 #4f86d9, stop:1 #d9a54f);
+    border-radius: 7px;
+    margin: 2px;
+}
+""",
+        title_style="font-weight: 700; font-size: 15px; color: #17212b;",
+        muted_text_style="color: #596878;",
+        guidance_card_style=(
+            "background-color: rgba(255, 255, 255, 210);"
+            "border: 1px solid rgba(129, 151, 166, 82);"
+            "border-radius: 8px;"
+        ),
+        drop_hint_text_style="color: #263544;",
+        note_text_style="color: #7a4d08;",
+        runtime_hint_text_style="color: #4b5a68;",
+        status_text_style="font-weight: 700; color: #17212b;",
+        progress_detail_style="color: #586675;",
+    ),
+}
+
+MUTED_TEXT_STYLE = THEMES["Aurora Glass"].muted_text_style
+DROP_HINT_STYLE = THEMES["Aurora Glass"].drop_hint_text_style
+NOTE_TEXT_STYLE = THEMES["Aurora Glass"].note_text_style
+RUNTIME_HINT_STYLE = THEMES["Aurora Glass"].runtime_hint_text_style
+STATUS_TEXT_STYLE = THEMES["Aurora Glass"].status_text_style
+PROGRESS_DETAIL_STYLE = THEMES["Aurora Glass"].progress_detail_style
+
+
+class WrappedFormLabel(QLabel):
+    def __init__(self, text: str = "") -> None:
+        super().__init__(text)
+        self.setWordWrap(True)
+        self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        self.refresh_wrapped_height()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self.refresh_wrapped_height()
+
+    def refresh_wrapped_height(self) -> None:
+        width = self.width() or self.sizeHint().width()
+        if width <= 0:
+            return
+        wrapped_height = self.heightForWidth(width) if self.hasHeightForWidth() else self.sizeHint().height()
+        if wrapped_height > 0 and self.minimumHeight() != wrapped_height:
+            self.setMinimumHeight(wrapped_height)
+            self.updateGeometry()
+
+
 class MainWindow(QMainWindow):
     def __init__(self, settings_service: SettingsService, logger: logging.Logger) -> None:
         super().__init__()
@@ -80,9 +573,12 @@ class MainWindow(QMainWindow):
         self.queue_running = False
         self.current_run_origin = "single"
         self.current_queue_task_id: str | None = None
+        self._text_feedback_animations: dict[QLabel, QPropertyAnimation] = {}
+        self._drop_hint_state = "idle"
 
         self.setWindowTitle("Whisper Turbo Desktop")
-        self.resize(1280, 860)
+        self.setMinimumSize(WINDOW_MINIMUM_WIDTH, WINDOW_MINIMUM_HEIGHT)
+        self.resize(WINDOW_INITIAL_WIDTH, WINDOW_INITIAL_HEIGHT)
         self.setAcceptDrops(True)
 
         self._build_ui()
@@ -96,12 +592,17 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         central_widget = QWidget(self)
         central_layout = QVBoxLayout(central_widget)
+        central_layout.setContentsMargins(10, 10, 10, 10)
+        central_layout.setSpacing(6)
         central_layout.addWidget(self._build_top_bar())
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_task_panel())
-        splitter.addWidget(self._build_right_panel())
-        splitter.setSizes([560, 720])
-        central_layout.addWidget(splitter)
+        self.main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.addWidget(self._build_task_panel())
+        self.main_splitter.addWidget(self._build_right_panel())
+        self.main_splitter.setSizes([TASK_PANEL_INITIAL_WIDTH, RIGHT_PANEL_INITIAL_WIDTH])
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 1)
+        central_layout.addWidget(self.main_splitter)
         self.setCentralWidget(central_widget)
 
         self.status_label.setText("Ready")
@@ -112,80 +613,92 @@ class MainWindow(QMainWindow):
 
     def _build_top_bar(self) -> QWidget:
         bar = QWidget()
+        bar.setObjectName("TopBar")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(0, 0, 0, 8)
+        layout.setContentsMargins(0, 0, 0, 4)
+        layout.setSpacing(8)
 
-        title_label = QLabel(f"Whisper Turbo Desktop {__version__}")
-        title_label.setStyleSheet("font-weight: 600; font-size: 16px;")
+        self.title_label = QLabel(f"Whisper Turbo Desktop {__version__}")
         self.install_path_label = QLabel("")
-        self.install_path_label.setStyleSheet("color: #475569;")
+        self.install_path_label.setStyleSheet(MUTED_TEXT_STYLE)
+        self.install_path_label.setMinimumWidth(0)
+        self.install_path_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.install_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
+        theme_label = QLabel("Theme")
+        theme_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(THEME_NAMES)
+        self.theme_combo.setMinimumWidth(130)
         self.open_install_button = QPushButton("Open Install Folder")
         self.top_refresh_button = QPushButton("Refresh Diagnostics")
 
-        layout.addWidget(title_label)
+        layout.addWidget(self.title_label)
         layout.addWidget(self.install_path_label, stretch=1)
+        layout.addWidget(theme_label)
+        layout.addWidget(self.theme_combo)
         layout.addWidget(self.open_install_button)
         layout.addWidget(self.top_refresh_button)
         return bar
 
     def _build_task_panel(self) -> QWidget:
+        scroll_area = QScrollArea()
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setMinimumWidth(TASK_PANEL_MINIMUM_WIDTH)
+        scroll_area.setMaximumWidth(TASK_PANEL_MAXIMUM_WIDTH)
+
         panel = QWidget()
+        panel.setObjectName("TaskRailContent")
+        panel.setMinimumWidth(TASK_PANEL_MINIMUM_WIDTH - 20)
         layout = QVBoxLayout(panel)
-        task_group = QGroupBox("Task")
+        layout.setContentsMargins(0, 0, 6, 0)
+        layout.setSpacing(8)
+
+        task_group = QGroupBox("Input & Whisper")
         form = QFormLayout(task_group)
+        self._configure_form_layout(form)
 
-        self.input_path_edit = QLineEdit()
-        self.input_path_edit.setPlaceholderText("Drop one file here or click Browse File")
-        self.input_path_edit.setAcceptDrops(False)
-        self.input_browse_button = QPushButton("Browse File")
-        form.addRow("Input File", self._with_button(self.input_path_edit, self.input_browse_button))
-
-        self.drop_hint_label = QLabel(
-            "Drop one file to replace the current input.\n"
-            "Drop multiple files to add them to the batch queue."
-        )
-        self.drop_hint_label.setWordWrap(True)
-        self.drop_hint_label.setStyleSheet(
-            "border: 1px dashed #94a3b8; padding: 10px; border-radius: 6px; background: #f8fafc;"
-        )
-        form.addRow("Quick Drop", self.drop_hint_label)
-
-        self.output_dir_edit = QLineEdit()
-        self.output_browse_button = QPushButton("Browse Folder")
-        form.addRow("Output Folder", self._with_button(self.output_dir_edit, self.output_browse_button))
+        form.addRow(self._build_file_picker_section())
 
         self.model_combo = QComboBox()
         self.model_combo.addItems(SUPPORTED_MODELS)
-        form.addRow("Model", self.model_combo)
+        form.addRow("Whisper Model", self.model_combo)
 
         self.output_language_combo = QComboBox()
         self.output_language_combo.addItems(list(OUTPUT_LANGUAGE_TO_TASK))
-        form.addRow("Output Language", self.output_language_combo)
+        form.addRow("Whisper Mode", self.output_language_combo)
 
         self.source_language_edit = QLineEdit()
         self.source_language_edit.setPlaceholderText("Leave empty for auto detection, e.g. Chinese or en")
-        form.addRow("Source Language", self.source_language_edit)
+        form.addRow("Spoken Language", self.source_language_edit)
 
-        self.translation_settings_group = QGroupBox("Translation Settings")
+        self.translation_settings_group = QGroupBox("Optional API Subtitle Translation")
         translation_form = QFormLayout(self.translation_settings_group)
+        self._configure_form_layout(translation_form)
+        self.translation_status_label = WrappedFormLabel()
+        self.translation_status_card = self.translation_status_label
+        translation_form.addRow(self.translation_status_label)
+
         self.translation_target_language_edit = QLineEdit()
-        self.translation_target_language_edit.setPlaceholderText("Optional subtitle target, e.g. Spanish or ja")
-        translation_form.addRow("Target Subtitle Language", self.translation_target_language_edit)
+        self.translation_target_language_edit.setPlaceholderText(
+            "Leave empty to skip API translation, e.g. Japanese or Spanish"
+        )
+        translation_form.addRow("Extra Subtitle Language", self.translation_target_language_edit)
 
         self.translation_api_key_edit = QLineEdit()
         self.translation_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.translation_api_key_edit.setPlaceholderText("OpenAI-compatible API key")
-        translation_form.addRow("API Key", self.translation_api_key_edit)
+        translation_form.addRow("API Key for Subtitles", self.translation_api_key_edit)
 
         self.translation_base_url_edit = QLineEdit()
         self.translation_base_url_edit.setPlaceholderText("https://api.openai.com/v1 or full chat endpoint")
-        translation_form.addRow("Endpoint", self.translation_base_url_edit)
+        translation_form.addRow("API Endpoint", self.translation_base_url_edit)
 
         self.translation_model_edit = QLineEdit()
         self.translation_model_edit.setPlaceholderText("gpt-4o-mini")
-        translation_form.addRow("Model", self.translation_model_edit)
+        translation_form.addRow("API Translation Model", self.translation_model_edit)
 
         self.device_combo = QComboBox()
         self.device_combo.addItems(["auto", "cuda", "cpu"])
@@ -197,27 +710,31 @@ class MainWindow(QMainWindow):
 
         self.runtime_path_edit = QLineEdit()
         self.runtime_path_edit.setReadOnly(True)
-        form.addRow("Runtime", self.runtime_path_edit)
+        form.addRow("App Install Folder", self.runtime_path_edit)
 
-        self.task_note = QLabel()
-        self.task_note.setWordWrap(True)
-        self.task_note.setStyleSheet("color: #b45309;")
-        form.addRow("Note", self.task_note)
+        self.task_note = WrappedFormLabel()
+        self.task_note_card = self.task_note
+        self.task_note.setStyleSheet(NOTE_TEXT_STYLE)
+        self.task_note.refresh_wrapped_height()
+        form.addRow(self.task_note)
 
-        self.runtime_hint_label = QLabel(
-            f"Installed builds fetch runtime assets and ffmpeg through the bootstrap launcher.\n"
-            f"The Whisper model still downloads on first transcription to {local_whisper_cache_dir()}."
+        self.runtime_hint_label = WrappedFormLabel(
+            f"Whisper model cache: {self._display_path(local_whisper_cache_dir())}"
         )
-        self.runtime_hint_label.setWordWrap(True)
-        self.runtime_hint_label.setStyleSheet("color: #475569;")
-        form.addRow("Runtime Hints", self.runtime_hint_label)
+        self.runtime_hint_card = self.runtime_hint_label
+        self.runtime_hint_label.setStyleSheet(RUNTIME_HINT_STYLE)
+        self.runtime_hint_label.refresh_wrapped_height()
+        form.addRow(self.runtime_hint_label)
 
         actions_group = QGroupBox("Actions")
         actions = QGridLayout(actions_group)
+        actions.setContentsMargins(8, 12, 8, 8)
+        actions.setHorizontalSpacing(6)
+        actions.setVerticalSpacing(6)
         self.start_button = QPushButton("Run Current")
-        self.add_current_queue_button = QPushButton("Queue Current")
-        self.add_files_queue_button = QPushButton("Queue Files")
-        self.start_queue_button = QPushButton("Start Queue")
+        self.add_current_queue_button = QPushButton("Add Current to Queue")
+        self.add_files_queue_button = QPushButton("Add Files to Queue")
+        self.start_queue_button = QPushButton("Run Queue")
         self.cancel_button = QPushButton("Cancel")
         self.open_output_button = QPushButton("Open Output Folder")
         self.refresh_button = QPushButton("Refresh Diagnostics")
@@ -230,29 +747,49 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.refresh_button, 3, 0, 1, 2)
 
         status_group = QGroupBox("Status")
-        status = QVBoxLayout(status_group)
+        status = QGridLayout(status_group)
+        status.setContentsMargins(8, 12, 8, 8)
+        status.setHorizontalSpacing(8)
+        status.setVerticalSpacing(5)
         self.status_label = QLabel("Ready")
+        self.status_label.setStyleSheet(STATUS_TEXT_STYLE)
         self.progress_bar = QProgressBar()
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%p%")
+        self.progress_bar.setFixedHeight(22)
+        self.progress_animation = QPropertyAnimation(self.progress_bar, b"value", self)
+        self.progress_animation.setDuration(320)
+        self.progress_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.progress_detail_label = QLabel("No task is running")
         self.progress_detail_label.setWordWrap(True)
-        status.addWidget(self.status_label)
-        status.addWidget(self.progress_bar)
-        status.addWidget(self.progress_detail_label)
+        self.progress_detail_label.setStyleSheet(PROGRESS_DETAIL_STYLE)
+        self.progress_detail_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.progress_detail_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        status.addWidget(self.status_label, 0, 0)
+        status.addWidget(self.progress_bar, 0, 1)
+        status.addWidget(self.progress_detail_label, 1, 0, 1, 2)
+        status.setColumnStretch(1, 1)
 
         layout.addWidget(task_group)
         layout.addWidget(self.translation_settings_group)
         layout.addWidget(actions_group)
         layout.addWidget(status_group)
         layout.addStretch(1)
-        return panel
+        scroll_area.setWidget(panel)
+        return scroll_area
 
     def _build_right_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
         diagnostics_group = QGroupBox("Diagnostics")
         diagnostics_layout = QVBoxLayout(diagnostics_group)
+        diagnostics_layout.setContentsMargins(8, 12, 8, 8)
+        diagnostics_layout.setSpacing(6)
         self.diagnostics_text = QPlainTextEdit()
         self.diagnostics_text.setReadOnly(True)
+        self.diagnostics_text.setMinimumHeight(96)
         diagnostics_layout.addWidget(self.diagnostics_text)
 
         tabs = QTabWidget()
@@ -261,9 +798,11 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.output_files_list, "Output Files")
         self.preview_text = QPlainTextEdit()
         self.preview_text.setReadOnly(True)
+        self.preview_text.setPlainText("Run a task, then select an output file to preview. Double-click an output file to open it.")
         tabs.addTab(self.preview_text, "Preview")
         self.log_text = QPlainTextEdit()
         self.log_text.setReadOnly(True)
+        self.log_text.setPlainText("Run a task to see Whisper, download, and translation logs here.")
         tabs.addTab(self.log_text, "Logs")
         tabs.addTab(self._build_queue_tab(), "Queue")
         tabs.addTab(self._build_history_tab(), "History")
@@ -275,9 +814,12 @@ class MainWindow(QMainWindow):
     def _build_queue_tab(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
         button_row = QWidget()
         button_layout = QHBoxLayout(button_row)
         button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(6)
         self.remove_queue_item_button = QPushButton("Remove Selected")
         self.clear_queue_button = QPushButton("Clear Queue")
         button_layout.addWidget(self.remove_queue_item_button)
@@ -297,6 +839,8 @@ class MainWindow(QMainWindow):
     def _build_history_tab(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
         self.history_list = QListWidget()
         self.history_detail_text = QPlainTextEdit()
         self.history_detail_text.setReadOnly(True)
@@ -330,6 +874,11 @@ class MainWindow(QMainWindow):
         self.output_language_combo.currentTextChanged.connect(self._update_task_note)
         self.model_combo.currentTextChanged.connect(self._update_task_note)
         self.translation_target_language_edit.textChanged.connect(self._update_task_note)
+        self.translation_target_language_edit.textChanged.connect(self._refresh_translation_status)
+        self.translation_api_key_edit.textChanged.connect(self._refresh_translation_status)
+        self.translation_base_url_edit.textChanged.connect(self._refresh_translation_status)
+        self.translation_model_edit.textChanged.connect(self._refresh_translation_status)
+        self.theme_combo.currentTextChanged.connect(self._on_theme_changed)
 
     def _load_settings(self) -> None:
         output_dir = self.settings.default_output_dir or str(Path.home() / "Documents" / "Whisper Outputs")
@@ -346,6 +895,9 @@ class MainWindow(QMainWindow):
         self._set_combo_value(self.output_language_combo, self.settings.default_output_language)
         self._set_combo_value(self.device_combo, self.settings.default_device)
         self._set_combo_value(self.output_format_combo, self.settings.default_output_format)
+        self._set_combo_value(self.theme_combo, self.settings.theme)
+        self._apply_theme(self.theme_combo.currentText())
+        self._refresh_translation_status()
 
     def _persist_settings(self) -> None:
         settings = AppSettings(
@@ -360,19 +912,27 @@ class MainWindow(QMainWindow):
             translation_base_url=self.translation_base_url_edit.text().strip(),
             translation_model=self.translation_model_edit.text().strip(),
             translation_target_language=self.translation_target_language_edit.text().strip(),
+            theme=self.theme_combo.currentText(),
         )
         self.settings_service.save(settings)
         self.settings = settings
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if self._dropped_media_files(event):
+        files = self._dropped_media_files(event)
+        if files:
+            self._set_drop_hint_state("active", len(files))
             event.acceptProposedAction()
             return
         event.ignore()
 
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        self._set_drop_hint_state("idle")
+        super().dragLeaveEvent(event)
+
     def dropEvent(self, event: QDropEvent) -> None:
         files = self._dropped_media_files(event)
         if not files:
+            self._set_drop_hint_state("idle")
             event.ignore()
             return
         if len(files) == 1:
@@ -384,6 +944,7 @@ class MainWindow(QMainWindow):
             self._enqueue_requests(requests)
             self._apply_input_file(files[0])
             self._append_log(f"Added {len(files)} dropped files to the queue")
+        self._set_drop_hint_state("accepted", len(files))
         event.acceptProposedAction()
 
     def select_input_file(self) -> None:
@@ -702,7 +1263,7 @@ class MainWindow(QMainWindow):
             self.queue_running = False
             self._set_running_state(False)
             self.status_label.setText("Queue completed")
-            self.progress_bar.setValue(100)
+            self._update_progress_value(100)
             self.progress_detail_label.setText("All queued tasks have been processed")
             return
 
@@ -752,7 +1313,14 @@ class MainWindow(QMainWindow):
         self.log_text.appendPlainText(message)
 
     def _update_progress_value(self, value: int) -> None:
-        self.progress_bar.setValue(value)
+        bounded_value = max(self.progress_bar.minimum(), min(value, self.progress_bar.maximum()))
+        if not hasattr(self, "progress_animation"):
+            self.progress_bar.setValue(bounded_value)
+            return
+        self.progress_animation.stop()
+        self.progress_animation.setStartValue(self.progress_bar.value())
+        self.progress_animation.setEndValue(bounded_value)
+        self.progress_animation.start()
 
     def _set_running_state(self, running: bool) -> None:
         self.start_button.setEnabled(not running)
@@ -765,7 +1333,7 @@ class MainWindow(QMainWindow):
         self.remove_queue_item_button.setEnabled(not running)
         self.clear_queue_button.setEnabled(not running)
         if not running and self.progress_bar.value() < 100:
-            self.progress_bar.setValue(0)
+            self._update_progress_value(0)
 
     def _show_error(self, message: str) -> None:
         self.logger.error(message)
@@ -775,25 +1343,108 @@ class MainWindow(QMainWindow):
         self.logger.warning(message)
         QMessageBox.warning(self, "Warning", message)
 
+    def _on_theme_changed(self, theme_name: str) -> None:
+        self._apply_theme(theme_name)
+        self._persist_settings()
+
+    def _apply_theme(self, theme_name: str) -> None:
+        theme = THEMES.get(theme_name, THEMES["Aurora Glass"])
+        self.setStyleSheet(theme.app_style)
+        self.progress_bar.setStyleSheet(theme.progress_style)
+        self.title_label.setStyleSheet(theme.title_style)
+        self.install_path_label.setStyleSheet(theme.muted_text_style)
+        self.drop_hint_label.setStyleSheet(self._drop_hint_card_style(theme))
+        self.task_note.setStyleSheet(
+            self._card_label_style(theme, theme.note_text_style)
+        )
+        self.runtime_hint_label.setStyleSheet(
+            self._card_label_style(theme, theme.runtime_hint_text_style)
+        )
+        self.translation_status_label.setStyleSheet(
+            self._card_label_style(theme, theme.runtime_hint_text_style)
+        )
+        self.status_label.setStyleSheet(theme.status_text_style)
+        self.progress_detail_label.setStyleSheet(theme.progress_detail_style)
+
+    def _refresh_translation_status(self) -> None:
+        target_language = self.translation_target_language_edit.text().strip()
+        api_key = self.translation_api_key_edit.text().strip()
+        base_url = self.translation_base_url_edit.text().strip()
+        model = self.translation_model_edit.text().strip()
+        if not target_language:
+            message = "API subtitle translation is off. Set an extra subtitle language to enable translated sidecars."
+        elif not api_key:
+            message = f"Target set to {target_language}, but the subtitle translation API key is missing."
+        elif not base_url:
+            message = f"Target set to {target_language}, but the API endpoint is missing."
+        elif not model:
+            message = f"Target set to {target_language}, but the API translation model is missing."
+        else:
+            message = f"API subtitle translation ready: {target_language} via {model}."
+        self.translation_status_label.setText(message)
+
     def _update_task_note(self) -> None:
         model = self.model_combo.currentText()
         translation_target = self.translation_target_language_edit.text().strip()
         if self.output_language_combo.currentText() == "English (Translate)":
-            parts = [
-                f"English (Translate) uses Whisper translate mode with the {model} model.",
-                "The model will be downloaded on first use if it is not already cached.",
-            ]
+            whisper_note = f"Whisper translate mode: English subtitles with {model}."
         else:
-            parts = [
-                f"Original output keeps the spoken language and uses Whisper transcribe mode with the {model} model.",
-                "The model will be downloaded on first use if needed.",
-            ]
+            whisper_note = f"Whisper transcribe mode: Original subtitles with {model}."
         if translation_target:
-            parts.append(
-                f"Translation target {translation_target} is enabled; translated subtitle sidecars "
-                "(.translated.srt/.vtt/.txt) will be written next to the normal outputs."
+            api_note = (
+                f"API subtitle sidecars: {translation_target} translated subtitle sidecars "
+                "(.translated.srt/.vtt/.txt)."
             )
-        self.task_note.setText(" ".join(parts))
+        else:
+            api_note = "API subtitle sidecars: Off."
+        self.task_note.setText(f"{whisper_note} {api_note}")
+        self._refresh_translation_status()
+
+    def _set_drop_hint_state(self, state: str, file_count: int = 0) -> None:
+        if state not in {"idle", "active", "accepted"}:
+            state = "idle"
+        self._drop_hint_state = state
+        self.drop_hint_label.setText(self._drop_hint_text(state, file_count))
+        self._apply_theme(self.theme_combo.currentText())
+        self._pulse_label(self.drop_hint_label)
+        if state == "accepted":
+            QTimer.singleShot(950, self._reset_accepted_drop_hint)
+
+    @staticmethod
+    def _drop_hint_text(state: str, file_count: int = 0) -> str:
+        if state == "active":
+            if file_count > 1:
+                return f"Release to add {file_count} files to the queue"
+            return "Release to select this input file"
+        if state == "accepted":
+            if file_count > 1:
+                return f"Added {file_count} files to the queue"
+            return "Input file selected"
+        return (
+            "Drop media files here\n"
+            "One file selects input; multiple files add to queue."
+        )
+
+    def _reset_accepted_drop_hint(self) -> None:
+        if self._drop_hint_state == "accepted":
+            self._set_drop_hint_state("idle")
+
+    def _pulse_label(self, label: QLabel) -> None:
+        effect = label.graphicsEffect()
+        if not isinstance(effect, QGraphicsOpacityEffect):
+            effect = QGraphicsOpacityEffect(label)
+            label.setGraphicsEffect(effect)
+        existing_animation = self._text_feedback_animations.get(label)
+        if existing_animation is not None:
+            existing_animation.stop()
+        effect.setOpacity(0.7)
+        animation = QPropertyAnimation(effect, b"opacity", self)
+        animation.setDuration(260)
+        animation.setStartValue(0.7)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._text_feedback_animations[label] = animation
+        animation.start()
 
     def _apply_input_file(self, file_path: Path) -> None:
         self.input_path_edit.setText(str(file_path))
@@ -818,7 +1469,9 @@ class MainWindow(QMainWindow):
             self.queue_list.addItem(item)
 
         if not self.queue_tasks:
-            self.queue_detail_text.setPlainText("No queued tasks.")
+            self.queue_detail_text.setPlainText(
+                "No queued tasks. Add the current file or add multiple files, then run the queue."
+            )
             return
 
         selected_id = selected_id or self.queue_tasks[0].queue_id
@@ -860,7 +1513,9 @@ class MainWindow(QMainWindow):
             self.history_list.setCurrentRow(0)
             self.history_detail_text.setPlainText(self.history_records[0].details_text())
         else:
-            self.history_detail_text.setPlainText("No task history yet.")
+            self.history_detail_text.setPlainText(
+                "No task history yet. Completed runs appear here; double-click a history item to open its first output or folder."
+            )
 
     def _add_history_record(self, record: HistoryRecord) -> None:
         self.history_records = self.history_service.append(record)
@@ -913,16 +1568,132 @@ class MainWindow(QMainWindow):
         return datetime.now().astimezone().isoformat(timespec="seconds")
 
     @staticmethod
-    def _with_button(text_input: QLineEdit, button: QPushButton) -> QWidget:
+    def _configure_file_label(label: QLabel) -> None:
+        label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+    @staticmethod
+    def _card_label_style(theme: ThemeDefinition, text_style: str) -> str:
+        return f"{theme.guidance_card_style}{text_style}padding: 7px 9px;"
+
+    def _drop_hint_card_style(self, theme: ThemeDefinition) -> str:
+        state = self._drop_hint_state
+        if theme is THEMES["Clean Light"]:
+            styles = {
+                "idle": (
+                    "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+                    "stop:0 rgba(255,255,255,226), stop:1 rgba(229,244,241,224));"
+                    "border: 1px dashed rgba(54, 129, 125, 150);"
+                ),
+                "active": (
+                    "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+                    "stop:0 rgba(218,247,239,238), stop:1 rgba(226,236,255,236));"
+                    "border: 2px solid rgba(49, 150, 138, 210);"
+                ),
+                "accepted": (
+                    "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+                    "stop:0 rgba(220,250,231,238), stop:1 rgba(239,246,211,236));"
+                    "border: 2px solid rgba(60, 150, 91, 210);"
+                ),
+            }
+        elif theme is THEMES["Slate Glass"]:
+            styles = {
+                "idle": (
+                    "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+                    "stop:0 rgba(48,60,79,166), stop:1 rgba(22,29,43,154));"
+                    "border: 1px dashed rgba(156, 187, 222, 156);"
+                ),
+                "active": (
+                    "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+                    "stop:0 rgba(60,103,156,202), stop:1 rgba(74,61,139,190));"
+                    "border: 2px solid rgba(145, 194, 255, 220);"
+                ),
+                "accepted": (
+                    "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+                    "stop:0 rgba(33,116,91,204), stop:1 rgba(73,99,62,190));"
+                    "border: 2px solid rgba(105, 224, 181, 220);"
+                ),
+            }
+        else:
+            styles = {
+                "idle": (
+                    "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+                    "stop:0 rgba(42,72,79,168), stop:1 rgba(20,36,50,154));"
+                    "border: 1px dashed rgba(139, 222, 212, 156);"
+                ),
+                "active": (
+                    "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+                    "stop:0 rgba(44,139,128,206), stop:1 rgba(54,88,145,192));"
+                    "border: 2px solid rgba(95, 229, 206, 224);"
+                ),
+                "accepted": (
+                    "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+                    "stop:0 rgba(33,132,96,204), stop:1 rgba(96,111,49,190));"
+                    "border: 2px solid rgba(118, 232, 164, 224);"
+                ),
+            }
+        return (
+            f"{styles.get(state, styles['idle'])}"
+            f"{theme.drop_hint_text_style}"
+            "border-radius: 8px;"
+            "font-weight: 700;"
+            "padding: 10px 12px;"
+        )
+
+    def _build_file_picker_section(self) -> QWidget:
         container = QWidget()
-        layout = QHBoxLayout(container)
+        layout = QGridLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(text_input)
-        layout.addWidget(button)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(6)
+
+        input_label = QLabel("Input File")
+        self._configure_file_label(input_label)
+        self.input_path_edit = QLineEdit()
+        self.input_path_edit.setPlaceholderText("Drop one file here or click Browse File")
+        self.input_path_edit.setAcceptDrops(False)
+        self.input_path_edit.setMinimumWidth(300)
+        self.input_browse_button = QPushButton("Browse File")
+        self.input_browse_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+        self.drop_hint_label = WrappedFormLabel(
+            "Drop media files here\n"
+            "One file selects input; multiple files add to queue."
+        )
+        self.drop_hint_card = self.drop_hint_label
+        self.drop_hint_label.setStyleSheet(DROP_HINT_STYLE)
+        self.drop_hint_label.refresh_wrapped_height()
+
+        output_label = QLabel("Output Folder")
+        self._configure_file_label(output_label)
+        self.output_dir_edit = QLineEdit()
+        self.output_dir_edit.setMinimumWidth(300)
+        self.output_browse_button = QPushButton("Browse Folder")
+        self.output_browse_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+        layout.addWidget(input_label, 0, 0)
+        layout.addWidget(self.input_path_edit, 0, 1)
+        layout.addWidget(self.input_browse_button, 0, 2)
+        layout.addWidget(self.drop_hint_label, 1, 0, 1, 3)
+        layout.addWidget(output_label, 2, 0)
+        layout.addWidget(self.output_dir_edit, 2, 1)
+        layout.addWidget(self.output_browse_button, 2, 2)
+        layout.setColumnStretch(1, 1)
         return container
+
+    @staticmethod
+    def _configure_form_layout(form: QFormLayout) -> None:
+        form.setContentsMargins(8, 12, 8, 8)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form.setHorizontalSpacing(8)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        form.setVerticalSpacing(5)
 
     @staticmethod
     def _set_combo_value(combo: QComboBox, value: str) -> None:
         index = combo.findText(value)
         if index >= 0:
             combo.setCurrentIndex(index)
+
+    @staticmethod
+    def _display_path(path: Path) -> str:
+        return str(path)
