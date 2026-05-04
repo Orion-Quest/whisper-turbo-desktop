@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import zipfile
 from dataclasses import dataclass
 from enum import Enum
@@ -59,13 +61,13 @@ def curl_executable() -> str | None:
 
 
 def select_download_backend() -> tuple[DownloadBackend, str | None]:
-    https_error = python_https_error()
-    if https_error is None:
-        return DownloadBackend.PYTHON, None
-
     curl_path = curl_executable()
     if curl_path is not None:
         return DownloadBackend.CURL, curl_path
+
+    https_error = python_https_error()
+    if https_error is None:
+        return DownloadBackend.PYTHON, None
 
     raise RuntimeError(
         "HTTPS downloads are unavailable. "
@@ -82,18 +84,47 @@ def _release_self_test() -> int:
     return 0
 
 
-def _run_curl_download(url: str, destination: Path, curl_path: str) -> None:
+def _run_curl_download(
+    url: str,
+    destination: Path,
+    curl_path: str,
+    progress_callback=None,
+) -> None:
     command = [
         curl_path,
         "--location",
         "--fail",
         "--silent",
         "--show-error",
+        "--retry",
+        "8",
+        "--retry-delay",
+        "5",
+        "--retry-max-time",
+        "3600",
+        "--retry-all-errors",
+        "--connect-timeout",
+        "30",
+        "--continue-at",
+        "-",
         "--output",
         str(destination),
         url,
     ]
+    stop_event = threading.Event()
+    progress_thread: threading.Thread | None = None
+    if progress_callback is not None:
+        progress_thread = threading.Thread(
+            target=_poll_file_progress,
+            args=(destination, stop_event, progress_callback),
+            daemon=True,
+        )
+        progress_thread.start()
+
     result = subprocess.run(command, capture_output=True, text=True)
+    stop_event.set()
+    if progress_thread is not None:
+        progress_thread.join(timeout=1)
     if result.returncode != 0:
         details = (result.stderr or result.stdout or "").strip()
         raise RuntimeError(
@@ -101,6 +132,12 @@ def _run_curl_download(url: str, destination: Path, curl_path: str) -> None:
             f"curl exited with code {result.returncode}"
             + (f": {details}" if details else "")
         )
+
+
+def _poll_file_progress(destination: Path, stop_event: threading.Event, progress_callback) -> None:
+    while not stop_event.wait(0.5):
+        if destination.exists():
+            progress_callback(destination.stat().st_size)
 
 
 @dataclass(slots=True)
@@ -280,7 +317,8 @@ class BootstrapLauncher:
 
     def _download_bundle(self, label: str, bundle: ReleaseBundle, temp_root: Path) -> Path:
         self.ui.set_status(f"Downloading {label} package...")
-        part_dir = temp_root / f"{label}_parts"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        part_dir = self.download_root() / label
         part_dir.mkdir(parents=True, exist_ok=True)
 
         part_paths: list[Path] = []
@@ -305,6 +343,7 @@ class BootstrapLauncher:
 
     def _download_file(self, url: str, destination: Path, expected_sha256: str, expected_size: int) -> None:
         backend, curl_path = select_download_backend()
+        destination.parent.mkdir(parents=True, exist_ok=True)
         if backend is DownloadBackend.PYTHON:
             try:
                 with urllib.request.urlopen(url) as response, destination.open("wb") as output:
@@ -322,13 +361,23 @@ class BootstrapLauncher:
                 raise RuntimeError(f"Download failed: {url}\n{exc}") from exc
         elif curl_path is not None:
             self.ui.set_detail(f"{destination.name} (curl fallback)")
-            _run_curl_download(url, destination, curl_path)
+            def update_progress(downloaded: int) -> None:
+                if expected_size > 0:
+                    self.ui.set_progress(int(downloaded * 100 / expected_size))
+
+            _run_curl_download(url, destination, curl_path, update_progress)
             self.ui.set_progress(100)
 
         digest = file_sha256(destination)
         if digest != expected_sha256:
             destination.unlink(missing_ok=True)
-            raise RuntimeError(f"Checksum mismatch for {destination.name}")
+            raise RuntimeError(
+                f"Checksum mismatch for {destination.name}: expected {expected_sha256}, got {digest}. "
+                "The corrupt file was removed. Start the launcher again to retry the download."
+            )
+
+    def download_root(self) -> Path:
+        return self.install_root / "downloads"
 
     def _install_runtime(self, archive_path: Path, temp_root: Path) -> None:
         self.ui.set_status("Extracting runtime package...")
@@ -394,6 +443,8 @@ class BootstrapLauncher:
 
 
 def install_root_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
     local_appdata = os.environ.get("LOCALAPPDATA")
     if local_appdata:
         return Path(local_appdata) / "Programs" / INSTALL_DIR_NAME
