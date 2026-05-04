@@ -379,6 +379,149 @@ def test_translate_segments_retries_without_response_format_for_compatible_endpo
     assert result.txt_text == "Hola mundo"
 
 
+def test_translate_segments_retries_invalid_model_output_then_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_urlopen(request, timeout=0):
+        body = json.loads(request.data.decode("utf-8"))
+        calls.append(body)
+        if len(calls) == 1:
+            text = "错误\ufffd字幕"
+        else:
+            text = "修正后的字幕"
+        return _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {"translations": [{"index": 1, "text": text}]}
+                            )
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    service = SubtitleTranslationService(
+        api_key="sk-test",
+        base_url="https://api.example.com/v1",
+        model="gpt-4o-mini",
+        target_language="Chinese",
+    )
+
+    result = service.translate_segments(
+        [SubtitleSegment(index=1, start=0.0, end=2.0, text="Broken subtitle")]
+    )
+
+    assert len(calls) == 2
+    assert result.txt_text == "修正后的字幕"
+    assert "Previous response failed validation" in calls[1]["messages"][0]["content"]
+    assert "invalid replacement characters" in calls[1]["messages"][0]["content"]
+
+
+def test_translate_segments_retries_chinese_output_that_stays_in_source_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_urlopen(request, timeout=0):
+        nonlocal calls
+        calls += 1
+        return _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "translations": [
+                                        {
+                                            "index": 1,
+                                            "text": "Should've, would've, hadn't, ma'am, twas.",
+                                        }
+                                    ]
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    service = SubtitleTranslationService(
+        api_key="sk-test",
+        base_url="https://api.example.com/v1",
+        model="gpt-4o-mini",
+        target_language="Chinese",
+    )
+
+    with pytest.raises(SubtitleTranslationError) as exc_info:
+        service.translate_segments(
+            [
+                SubtitleSegment(
+                    index=1,
+                    start=0.0,
+                    end=2.0,
+                    text="Should've, would've, hadn't, ma'am, twas.",
+                )
+            ]
+        )
+
+    assert calls == 2
+    assert "does not look like Chinese subtitle text" in str(exc_info.value)
+
+
+def test_translate_segments_rejects_mixed_script_garbage_for_chinese(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_urlopen(request, timeout=0):
+        nonlocal calls
+        calls += 1
+        return _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "translations": [
+                                        {"index": 1, "text": "关于清晰度的Lрет事情。"}
+                                    ]
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    service = SubtitleTranslationService(
+        api_key="sk-test",
+        base_url="https://api.example.com/v1",
+        model="gpt-4o-mini",
+        target_language="Chinese",
+    )
+
+    with pytest.raises(SubtitleTranslationError) as exc_info:
+        service.translate_segments(
+            [SubtitleSegment(index=1, start=0.0, end=2.0, text="About clarity")]
+        )
+
+    assert calls == 2
+    assert "unexpected non-Chinese script" in str(exc_info.value)
+
+
 def test_translate_segments_retries_transient_tls_disconnect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

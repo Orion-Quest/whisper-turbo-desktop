@@ -17,6 +17,7 @@ MAX_TRANSLATION_CONTEXT_CHARS = 5000
 TRANSLATION_REQUEST_ATTEMPTS = 3
 TRANSLATION_REQUEST_TIMEOUT_SECONDS = 60
 TRANSLATION_REQUEST_RETRY_DELAYS_SECONDS = (0.4, 1.2)
+TRANSLATION_MODEL_OUTPUT_ATTEMPTS = 2
 TIMESTAMP_PATTERN = re.compile(r"\b\d{2}:\d{2}:\d{2}[,.]\d{3}\b")
 URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
 TRANSIENT_REQUEST_EXCEPTIONS = (
@@ -72,14 +73,8 @@ class SubtitleTranslationService:
         self._validate_config(segments)
         translated_blocks: list[str] = []
         for start_index, batch in self._iter_segment_batches(segments):
-            payload = self._build_request_payload(segments, start_index, batch)
-            response_payload = self._post_json(payload)
-            self._raise_for_truncated_response(response_payload)
-            translated_text = self._extract_message_content(response_payload)
             translated_blocks.extend(
-                self._extract_translated_blocks(
-                    translated_text, expected_segments=batch
-                )
+                self._translate_batch_with_output_retries(segments, start_index, batch)
             )
 
         translated_segments = [
@@ -98,6 +93,33 @@ class SubtitleTranslationService:
             vtt_text=self._render_vtt(translated_segments),
             txt_text=self._render_txt(translated_segments),
         )
+
+    def _translate_batch_with_output_retries(
+        self,
+        all_segments: list[SubtitleSegment],
+        start_index: int,
+        batch: list[SubtitleSegment],
+    ) -> list[str]:
+        previous_error = ""
+        for attempt in range(1, TRANSLATION_MODEL_OUTPUT_ATTEMPTS + 1):
+            payload = self._build_request_payload(
+                all_segments,
+                start_index,
+                batch,
+                retry_reason=previous_error,
+            )
+            response_payload = self._post_json(payload)
+            self._raise_for_truncated_response(response_payload)
+            translated_text = self._extract_message_content(response_payload)
+            try:
+                return self._extract_translated_blocks(
+                    translated_text, expected_segments=batch
+                )
+            except SubtitleTranslationError as exc:
+                previous_error = self._retry_reason_from_translation_error(exc)
+                if attempt >= TRANSLATION_MODEL_OUTPUT_ATTEMPTS:
+                    raise
+        raise SubtitleTranslationError("translation response did not contain text")
 
     def _validate_config(self, segments: list[SubtitleSegment]) -> None:
         if not self.api_key:
@@ -195,8 +217,15 @@ class SubtitleTranslationService:
         all_segments: list[SubtitleSegment],
         start_index: int,
         batch: list[SubtitleSegment],
+        retry_reason: str = "",
     ) -> dict[str, Any]:
         source_language = self.source_language or "auto-detected source language"
+        retry_instruction = ""
+        if retry_reason:
+            retry_instruction = (
+                "Previous response failed validation: "
+                f"{retry_reason}. Retry the same input and fix that problem. "
+            )
         return {
             "model": self.model,
             "messages": [
@@ -211,9 +240,14 @@ class SubtitleTranslationService:
                         "in the same order, using the same index values. "
                         "Use the full transcript context only to understand surrounding meaning; "
                         "translate only the segment text values. "
-                        "Do not add timestamps, numbering, markdown, URLs, platform names, "
+                        "Use natural subtitle wording in the target language, not word-by-word output. "
+                        "Translate ordinary source-language words; keep only unavoidable proper names, "
+                        "brand names, filenames, URLs, or technical tokens untranslated. "
+                        "Do not output mojibake, invalid replacement characters, mixed-script garbage, "
+                        "timestamps, numbering, markdown, URLs that were not in the source, platform names, "
                         "explanations, or unrelated content. "
-                        "Preserve line breaks inside each text value."
+                        "Preserve line breaks inside each text value. "
+                        f"{retry_instruction}"
                     ),
                 },
                 {
@@ -362,6 +396,10 @@ class SubtitleTranslationService:
         return message.replace(self.api_key, "[redacted]")
 
     @staticmethod
+    def _retry_reason_from_translation_error(exc: SubtitleTranslationError) -> str:
+        return SubtitleTranslationService._truncate_provider_message(str(exc))
+
+    @staticmethod
     def _is_response_format_error(message: str) -> bool:
         normalized = message.lower()
         return (
@@ -401,9 +439,8 @@ class SubtitleTranslationService:
                 "try a larger-context model or shorter input"
             )
 
-    @staticmethod
     def _extract_translated_blocks(
-        translated_text: str, *, expected_segments: list[SubtitleSegment]
+        self, translated_text: str, *, expected_segments: list[SubtitleSegment]
     ) -> list[str]:
         normalized = translated_text.replace("\r\n", "\n").strip()
         if not normalized:
@@ -439,7 +476,7 @@ class SubtitleTranslationService:
             zip(translations, expected_segments), start=1
         ):
             translated_blocks.append(
-                SubtitleTranslationService._extract_translation_text(
+                self._extract_translation_text(
                     translation,
                     expected_index=expected_segment.index,
                     position=position,
@@ -448,9 +485,8 @@ class SubtitleTranslationService:
             )
         return translated_blocks
 
-    @staticmethod
     def _extract_translation_text(
-        translation: Any, *, expected_index: int, position: int, source_text: str
+        self, translation: Any, *, expected_index: int, position: int, source_text: str
     ) -> str:
         if not isinstance(translation, dict):
             raise SubtitleTranslationError(
@@ -479,7 +515,7 @@ class SubtitleTranslationService:
             raise SubtitleTranslationError(
                 f"translation response item {position} text must not be empty"
             )
-        SubtitleTranslationService._validate_translated_text(
+        self._validate_translated_text(
             cleaned, source_text=source_text, position=position
         )
         return cleaned
@@ -569,9 +605,8 @@ class SubtitleTranslationService:
             "translation response content was not valid JSON"
         ) from original_error
 
-    @staticmethod
     def _validate_translated_text(
-        translated_text: str, *, source_text: str, position: int
+        self, translated_text: str, *, source_text: str, position: int
     ) -> None:
         if "\ufffd" in translated_text:
             raise SubtitleTranslationError(
@@ -589,6 +624,146 @@ class SubtitleTranslationService:
             raise SubtitleTranslationError(
                 f"translation response item {position} contains an unexpected URL"
             )
+
+        self._validate_target_script_quality(translated_text, position=position)
+
+    def _validate_target_script_quality(
+        self, translated_text: str, *, position: int
+    ) -> None:
+        profile = self._target_script_profile()
+        if profile == "chinese":
+            self._validate_chinese_translation_quality(
+                translated_text, position=position
+            )
+        elif profile == "japanese":
+            self._validate_cjk_translation_quality(
+                translated_text,
+                position=position,
+                script_name="Japanese",
+                target_count=self._count_japanese_script(translated_text),
+            )
+        elif profile == "korean":
+            self._validate_cjk_translation_quality(
+                translated_text,
+                position=position,
+                script_name="Korean",
+                target_count=self._count_korean_script(translated_text),
+            )
+
+    def _target_script_profile(self) -> str:
+        normalized = self.target_language.casefold()
+        if any(
+            token in normalized
+            for token in (
+                "chinese",
+                "mandarin",
+                "cantonese",
+                "simplified",
+                "traditional",
+                "中文",
+                "汉语",
+                "漢語",
+                "简体",
+                "繁体",
+                "zh",
+            )
+        ):
+            return "chinese"
+        if any(
+            token in normalized
+            for token in ("japanese", "日本語", "日语", "日文", "ja")
+        ):
+            return "japanese"
+        if any(
+            token in normalized
+            for token in ("korean", "한국어", "韩语", "韓語", "ko")
+        ):
+            return "korean"
+        return ""
+
+    def _validate_chinese_translation_quality(
+        self, translated_text: str, *, position: int
+    ) -> None:
+        cjk_count = self._count_cjk_unified(translated_text)
+        latin_count = self._count_latin_letters(translated_text)
+        unexpected_script_count = (
+            self._count_cyrillic_script(translated_text)
+            + self._count_korean_script(translated_text)
+            + self._count_kana_script(translated_text)
+        )
+        if unexpected_script_count:
+            raise SubtitleTranslationError(
+                f"translation response item {position} contains unexpected non-Chinese script"
+            )
+        if latin_count >= 8 and cjk_count == 0:
+            raise SubtitleTranslationError(
+                f"translation response item {position} does not look like Chinese subtitle text"
+            )
+        if latin_count >= 14 and latin_count > max(cjk_count * 2, 10):
+            raise SubtitleTranslationError(
+                f"translation response item {position} still contains too much source-language text"
+            )
+
+    def _validate_cjk_translation_quality(
+        self,
+        translated_text: str,
+        *,
+        position: int,
+        script_name: str,
+        target_count: int,
+    ) -> None:
+        latin_count = self._count_latin_letters(translated_text)
+        cyrillic_count = self._count_cyrillic_script(translated_text)
+        if cyrillic_count:
+            raise SubtitleTranslationError(
+                f"translation response item {position} contains unexpected Cyrillic script"
+            )
+        if latin_count >= 8 and target_count == 0:
+            raise SubtitleTranslationError(
+                f"translation response item {position} does not look like {script_name} subtitle text"
+            )
+        if latin_count >= 14 and latin_count > max(target_count * 2, 10):
+            raise SubtitleTranslationError(
+                f"translation response item {position} still contains too much source-language text"
+            )
+
+    @staticmethod
+    def _count_latin_letters(text: str) -> int:
+        return sum(
+            1
+            for character in text
+            if "A" <= character <= "Z" or "a" <= character <= "z"
+        )
+
+    @staticmethod
+    def _count_cjk_unified(text: str) -> int:
+        return sum(1 for character in text if "\u4e00" <= character <= "\u9fff")
+
+    @staticmethod
+    def _count_kana_script(text: str) -> int:
+        return sum(
+            1
+            for character in text
+            if "\u3040" <= character <= "\u30ff" or "\uff66" <= character <= "\uff9f"
+        )
+
+    @classmethod
+    def _count_japanese_script(cls, text: str) -> int:
+        return cls._count_cjk_unified(text) + cls._count_kana_script(text)
+
+    @staticmethod
+    def _count_korean_script(text: str) -> int:
+        return sum(
+            1
+            for character in text
+            if "\uac00" <= character <= "\ud7af"
+            or "\u1100" <= character <= "\u11ff"
+            or "\u3130" <= character <= "\u318f"
+        )
+
+    @staticmethod
+    def _count_cyrillic_script(text: str) -> int:
+        return sum(1 for character in text if "\u0400" <= character <= "\u04ff")
 
     @staticmethod
     def _format_srt_time(seconds: float) -> str:
