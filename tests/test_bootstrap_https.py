@@ -2,49 +2,11 @@ from __future__ import annotations
 
 import urllib.request
 from pathlib import Path
-from subprocess import CompletedProcess
 from types import SimpleNamespace
 
 import pytest
 
 from whisper_turbo_bootstrap import app
-from whisper_turbo_bootstrap.app import DownloadBackend
-
-
-def test_select_download_backend_prefers_curl_for_large_release_assets(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(app, "_SSL_IMPORT_ERROR", None)
-    monkeypatch.setattr(app, "curl_executable", lambda: "curl.exe")
-
-    backend, executable = app.select_download_backend()
-
-    assert backend is DownloadBackend.CURL
-    assert executable == "curl.exe"
-
-
-def test_select_download_backend_uses_curl_when_python_https_is_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(app, "_SSL_IMPORT_ERROR", None)
-    monkeypatch.setattr(urllib.request, "HTTPSHandler", None)
-    monkeypatch.setattr(app, "curl_executable", lambda: "curl.exe")
-
-    backend, executable = app.select_download_backend()
-
-    assert backend is DownloadBackend.CURL
-    assert executable == "curl.exe"
-
-
-def test_select_download_backend_reports_missing_https_support(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(app, "_SSL_IMPORT_ERROR", None)
-    monkeypatch.setattr(urllib.request, "HTTPSHandler", None)
-    monkeypatch.setattr(app, "curl_executable", lambda: None)
-
-    with pytest.raises(RuntimeError, match="HTTPS downloads are unavailable"):
-        app.select_download_backend()
 
 
 def test_install_root_dir_uses_local_appdata(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -60,26 +22,6 @@ def test_install_root_dir_uses_bootstrap_exe_parent_when_frozen(
     monkeypatch.setattr(app.sys, "executable", r"D:\Apps\WhisperTurboDesktop\WhisperTurboDesktop.exe")
 
     assert app.install_root_dir() == Path(r"D:\Apps\WhisperTurboDesktop")
-
-
-def test_curl_download_uses_retry_and_resume_options(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    calls: list[list[str]] = []
-
-    def fake_run(command: list[str], capture_output: bool, text: bool) -> CompletedProcess[str]:
-        calls.append(command)
-        return CompletedProcess(command, 0, "", "")
-
-    monkeypatch.setattr(app.subprocess, "run", fake_run)
-
-    app._run_curl_download("https://example.test/file.zip", tmp_path / "file.zip", "curl.exe")
-
-    command = calls[0]
-    assert "--retry" in command
-    assert "--retry-all-errors" in command
-    assert "--continue-at" in command
 
 
 def test_download_bundle_uses_persistent_download_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -140,8 +82,22 @@ def test_checksum_mismatch_reports_expected_and_actual(monkeypatch: pytest.Monke
         ),
     )
 
-    monkeypatch.setattr(app, "select_download_backend", lambda: (app.DownloadBackend.CURL, "curl.exe"))
-    monkeypatch.setattr(app, "_run_curl_download", lambda _url, _destination, _curl_path, _progress=None: None)
+    class FakeResponse:
+        headers = {"Content-Length": "3"}
+
+        def __init__(self) -> None:
+            self._chunks = [b"ok", b""]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self, _size: int) -> bytes:
+            return self._chunks.pop(0)
+
+    monkeypatch.setattr(app.urllib.request, "urlopen", lambda _url: FakeResponse())
     monkeypatch.setattr(app, "file_sha256", lambda _path: "actual")
 
     with pytest.raises(RuntimeError, match="expected expected, got actual"):

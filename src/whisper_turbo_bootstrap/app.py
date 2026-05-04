@@ -7,11 +7,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import threading
-import time
 import zipfile
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Sequence
 
@@ -43,11 +40,6 @@ INSTALL_DIR_NAME = "WhisperTurboDesktop"
 MANIFEST_FILENAME = "release-manifest.json"
 
 
-class DownloadBackend(Enum):
-    PYTHON = "python"
-    CURL = "curl"
-
-
 def python_https_error() -> str | None:
     if _SSL_IMPORT_ERROR is not None:
         return f"Python SSL support failed to initialize: {_SSL_IMPORT_ERROR}"
@@ -56,88 +48,15 @@ def python_https_error() -> str | None:
     return None
 
 
-def curl_executable() -> str | None:
-    return shutil.which("curl.exe") or shutil.which("curl")
-
-
-def select_download_backend() -> tuple[DownloadBackend, str | None]:
-    curl_path = curl_executable()
-    if curl_path is not None:
-        return DownloadBackend.CURL, curl_path
-
-    https_error = python_https_error()
-    if https_error is None:
-        return DownloadBackend.PYTHON, None
-
-    raise RuntimeError(
-        "HTTPS downloads are unavailable. "
-        f"{https_error}, and no curl executable was found for fallback downloads."
-    )
-
-
 def ensure_https_support() -> None:
-    select_download_backend()
+    https_error = python_https_error()
+    if https_error is not None:
+        raise RuntimeError(f"HTTPS downloads are unavailable. {https_error}.")
 
 
 def _release_self_test() -> int:
-    select_download_backend()
+    ensure_https_support()
     return 0
-
-
-def _run_curl_download(
-    url: str,
-    destination: Path,
-    curl_path: str,
-    progress_callback=None,
-) -> None:
-    command = [
-        curl_path,
-        "--location",
-        "--fail",
-        "--silent",
-        "--show-error",
-        "--retry",
-        "8",
-        "--retry-delay",
-        "5",
-        "--retry-max-time",
-        "3600",
-        "--retry-all-errors",
-        "--connect-timeout",
-        "30",
-        "--continue-at",
-        "-",
-        "--output",
-        str(destination),
-        url,
-    ]
-    stop_event = threading.Event()
-    progress_thread: threading.Thread | None = None
-    if progress_callback is not None:
-        progress_thread = threading.Thread(
-            target=_poll_file_progress,
-            args=(destination, stop_event, progress_callback),
-            daemon=True,
-        )
-        progress_thread.start()
-
-    result = subprocess.run(command, capture_output=True, text=True)
-    stop_event.set()
-    if progress_thread is not None:
-        progress_thread.join(timeout=1)
-    if result.returncode != 0:
-        details = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(
-            f"Download failed: {url}\n"
-            f"curl exited with code {result.returncode}"
-            + (f": {details}" if details else "")
-        )
-
-
-def _poll_file_progress(destination: Path, stop_event: threading.Event, progress_callback) -> None:
-    while not stop_event.wait(0.5):
-        if destination.exists():
-            progress_callback(destination.stat().st_size)
 
 
 @dataclass(slots=True)
@@ -342,31 +261,24 @@ class BootstrapLauncher:
         return archive_path
 
     def _download_file(self, url: str, destination: Path, expected_sha256: str, expected_size: int) -> None:
-        backend, curl_path = select_download_backend()
+        ensure_https_support()
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if backend is DownloadBackend.PYTHON:
-            try:
-                with urllib.request.urlopen(url) as response, destination.open("wb") as output:
-                    total = int(response.headers.get("Content-Length") or expected_size or 0)
-                    downloaded = 0
-                    while True:
-                        chunk = response.read(1024 * 256)
-                        if not chunk:
-                            break
-                        output.write(chunk)
-                        downloaded += len(chunk)
-                        if total > 0:
-                            self.ui.set_progress(int(downloaded * 100 / total))
-            except urllib.error.URLError as exc:
-                raise RuntimeError(f"Download failed: {url}\n{exc}") from exc
-        elif curl_path is not None:
-            self.ui.set_detail(f"{destination.name} (curl fallback)")
-            def update_progress(downloaded: int) -> None:
-                if expected_size > 0:
-                    self.ui.set_progress(int(downloaded * 100 / expected_size))
+        try:
+            with urllib.request.urlopen(url) as response, destination.open("wb") as output:
+                total = int(response.headers.get("Content-Length") or expected_size or 0)
+                downloaded = 0
+                while True:
+                    chunk = response.read(1024 * 256)
+                    if not chunk:
+                        break
+                    output.write(chunk)
+                    downloaded += len(chunk)
+                    if total > 0:
+                        self.ui.set_progress(int(downloaded * 100 / total))
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Download failed: {url}\n{exc}") from exc
 
-            _run_curl_download(url, destination, curl_path, update_progress)
-            self.ui.set_progress(100)
+        self.ui.set_progress(100)
 
         digest = file_sha256(destination)
         if digest != expected_sha256:
