@@ -1,6 +1,6 @@
 # Whisper Turbo Desktop
 
-Windows-only desktop GUI for local `openai/whisper` transcription and English translation.
+Windows-only desktop GUI for local `openai/whisper` transcription, Whisper English translation, and optional OpenAI-compatible subtitle translation to other languages.
 
 The project now uses a two-stage release model:
 
@@ -16,7 +16,8 @@ The project now uses a two-stage release model:
 - `Source Language` input plus `Output Language` selection
 - `Output Language = Original` maps to Whisper `transcribe`
 - `Output Language = English (Translate)` maps to Whisper `translate`
-- Optional OpenAI-compatible subtitle translation settings
+- Optional OpenAI-compatible subtitle translation to non-English target languages
+- Custom translation API key, endpoint, and model settings
 - Real progress display during transcription
 - Runtime model download on first use
 - History view with double-click open for output file or folder
@@ -49,6 +50,7 @@ if the model is not already cached.
 - Windows 10/11
 - Internet access on first launch
 - Internet access on first transcription if the model is not cached
+- Internet access during optional subtitle translation when an OpenAI-compatible provider is configured
 
 ### Development
 
@@ -91,9 +93,10 @@ whisper-turbo-desktop
 1. Choose or drop one media file.
 2. Set `Source Language` if you want to skip auto-detection.
 3. Choose `Output Language`.
-4. Click `Run Current`.
-5. If the model is not cached yet, Whisper will download it automatically.
-6. Double-click an output file to open it.
+4. Optionally fill in `Translation Settings` if you want translated subtitle sidecars.
+5. Click `Run Current`.
+6. If the model is not cached yet, Whisper will download it automatically.
+7. Double-click an output file to open it.
 
 ### Subtitle Translation Settings
 
@@ -106,7 +109,13 @@ To prepare the optional OpenAI-compatible subtitle translation path, fill in `Tr
 - `Endpoint`: OpenAI-compatible API root such as `https://api.openai.com/v1`, or a full `.../chat/completions` endpoint
 - `Model`: translation model name, for example `gpt-4o-mini`
 
-These values are saved with the rest of the app settings and applied to new runs and queued items.
+When configured, the app keeps the normal Whisper outputs and writes translated sidecar files next to them:
+
+- `<name>.translated.srt`
+- `<name>.translated.vtt`
+- `<name>.translated.txt`
+
+These values are saved with the rest of the app settings and applied to new runs and queued items. Leave `Target Subtitle Language` empty to skip the optional translation step.
 
 ### Batch Queue
 
@@ -155,5 +164,6 @@ docs/                        Release and rollout notes
 
 - First launch requires network access because runtime and `ffmpeg` are downloaded at that time
 - First transcription may still require network access if the model is not cached
+- Optional subtitle translation requires network access to the configured OpenAI-compatible endpoint
 - Torch remains the main size driver in the runtime package
 - Large runtime ZIPs may be split into parts for GitHub Releases
