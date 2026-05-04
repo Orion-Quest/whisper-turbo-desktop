@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 from io import BytesIO
 from urllib import error
 
@@ -376,6 +377,131 @@ def test_translate_segments_retries_without_response_format_for_compatible_endpo
     assert "response_format" in bodies[0]
     assert "response_format" not in bodies[1]
     assert result.txt_text == "Hola mundo"
+
+
+def test_translate_segments_retries_transient_tls_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_urlopen(request, timeout=0):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise error.URLError(
+                ssl.SSLError(
+                    "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol"
+                )
+            )
+        return _FakeResponse(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "translations": [
+                                        {"index": 1, "text": "Hola mundo"}
+                                    ]
+                                }
+                            )
+                        }
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        "whisper_turbo_desktop.services.translation_service.time.sleep",
+        lambda delay: None,
+    )
+
+    service = SubtitleTranslationService(
+        api_key="sk-test",
+        base_url="https://api.example.com/v1",
+        model="gpt-4o-mini",
+        target_language="Spanish",
+    )
+
+    result = service.translate_segments(
+        [SubtitleSegment(index=1, start=0.0, end=2.0, text="Hello world")]
+    )
+
+    assert calls == 2
+    assert result.txt_text == "Hola mundo"
+
+
+def test_translate_segments_reports_transient_tls_failure_after_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_urlopen(request, timeout=0):
+        nonlocal calls
+        calls += 1
+        raise error.URLError(
+            ssl.SSLError(
+                "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol"
+            )
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        "whisper_turbo_desktop.services.translation_service.time.sleep",
+        lambda delay: None,
+    )
+
+    service = SubtitleTranslationService(
+        api_key="sk-test",
+        base_url="https://api.example.com/v1",
+        model="gpt-4o-mini",
+        target_language="Spanish",
+    )
+
+    with pytest.raises(SubtitleTranslationError) as exc_info:
+        service.translate_segments(
+            [SubtitleSegment(index=1, start=0.0, end=2.0, text="Hello world")]
+        )
+
+    message = str(exc_info.value)
+    assert calls == 3
+    assert "after 3 attempts" in message
+    assert "TLS connection closed while reading the translation response" in message
+    assert "Check the API endpoint" in message
+    assert "urlopen error" not in message
+
+
+def test_translate_segments_reports_certificate_errors_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_urlopen(request, timeout=0):
+        nonlocal calls
+        calls += 1
+        raise error.URLError(
+            ssl.SSLCertVerificationError("certificate verify failed")
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    service = SubtitleTranslationService(
+        api_key="sk-test",
+        base_url="https://api.example.com/v1",
+        model="gpt-4o-mini",
+        target_language="Spanish",
+    )
+
+    with pytest.raises(SubtitleTranslationError) as exc_info:
+        service.translate_segments(
+            [SubtitleSegment(index=1, start=0.0, end=2.0, text="Hello world")]
+        )
+
+    message = str(exc_info.value)
+    assert calls == 1
+    assert "certificate verification failed" in message
+    assert "after 3 attempts" not in message
 
 
 def test_translate_segments_rejects_non_json_model_content(

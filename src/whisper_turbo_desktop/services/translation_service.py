@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import http.client
 import json
 import re
+import socket
+import ssl
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib import error, request
@@ -10,8 +14,21 @@ MAX_TRANSLATION_SEGMENTS_PER_REQUEST = 40
 MAX_TRANSLATION_SOURCE_CHARS_PER_REQUEST = 7000
 TRANSLATION_CONTEXT_SEGMENTS = 3
 MAX_TRANSLATION_CONTEXT_CHARS = 5000
+TRANSLATION_REQUEST_ATTEMPTS = 3
+TRANSLATION_REQUEST_TIMEOUT_SECONDS = 60
+TRANSLATION_REQUEST_RETRY_DELAYS_SECONDS = (0.4, 1.2)
 TIMESTAMP_PATTERN = re.compile(r"\b\d{2}:\d{2}:\d{2}[,.]\d{3}\b")
 URL_PATTERN = re.compile(r"https?://\S+", re.IGNORECASE)
+TRANSIENT_REQUEST_EXCEPTIONS = (
+    error.URLError,
+    TimeoutError,
+    socket.timeout,
+    ssl.SSLError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    http.client.RemoteDisconnected,
+    http.client.IncompleteRead,
+)
 
 
 @dataclass(slots=True)
@@ -97,30 +114,14 @@ class SubtitleTranslationService:
             raise SubtitleTranslationError("translation requires at least one segment")
 
     def _post_json(self, payload: dict[str, Any]) -> dict[str, Any]:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        request_obj = request.Request(
-            url=self._chat_completions_url(),
-            data=body,
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-        )
-
         try:
-            with request.urlopen(request_obj, timeout=60) as response:
-                raw = response.read()
+            raw = self._send_json_request(payload)
         except error.HTTPError as exc:
             message = self._format_http_error(exc)
             if payload.get("response_format") and self._is_response_format_error(message):
                 fallback_payload = dict(payload)
                 fallback_payload.pop("response_format", None)
                 return self._post_json(fallback_payload)
-            raise SubtitleTranslationError(message) from exc
-        except error.URLError as exc:
-            message = self._redact_secrets(f"translation request failed: {exc}")
             raise SubtitleTranslationError(message) from exc
 
         try:
@@ -133,6 +134,61 @@ class SubtitleTranslationService:
         if not isinstance(parsed, dict):
             raise SubtitleTranslationError("translation response must be a JSON object")
         return parsed
+
+    def _send_json_request(self, payload: dict[str, Any]) -> bytes:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        last_exception: BaseException | None = None
+        for attempt in range(1, TRANSLATION_REQUEST_ATTEMPTS + 1):
+            request_obj = request.Request(
+                url=self._chat_completions_url(),
+                data=body,
+                method="POST",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+            )
+            try:
+                with request.urlopen(
+                    request_obj, timeout=TRANSLATION_REQUEST_TIMEOUT_SECONDS
+                ) as response:
+                    return response.read()
+            except error.HTTPError:
+                raise
+            except TRANSIENT_REQUEST_EXCEPTIONS as exc:
+                if not self._is_retryable_request_exception(exc):
+                    message = self._format_non_retryable_request_error(exc)
+                    raise SubtitleTranslationError(message) from exc
+                last_exception = exc
+                if attempt >= TRANSLATION_REQUEST_ATTEMPTS:
+                    break
+                self._sleep_before_retry(attempt)
+
+        message = self._format_transient_request_error(
+            last_exception, TRANSLATION_REQUEST_ATTEMPTS
+        )
+        raise SubtitleTranslationError(message) from last_exception
+
+    @staticmethod
+    def _is_retryable_request_exception(exc: BaseException) -> bool:
+        if isinstance(exc, ssl.SSLCertVerificationError):
+            return False
+        if isinstance(exc, error.URLError):
+            reason = exc.reason
+            if isinstance(reason, ssl.SSLCertVerificationError):
+                return False
+            if isinstance(reason, TRANSIENT_REQUEST_EXCEPTIONS):
+                return True
+            return isinstance(reason, OSError)
+        return True
+
+    @staticmethod
+    def _sleep_before_retry(attempt: int) -> None:
+        delay_index = min(
+            max(attempt - 1, 0), len(TRANSLATION_REQUEST_RETRY_DELAYS_SECONDS) - 1
+        )
+        time.sleep(TRANSLATION_REQUEST_RETRY_DELAYS_SECONDS[delay_index])
 
     def _build_request_payload(
         self,
@@ -186,6 +242,59 @@ class SubtitleTranslationService:
         if self.base_url.endswith("/chat/completions"):
             return self.base_url
         return f"{self.base_url}/chat/completions"
+
+    def _format_transient_request_error(
+        self, exc: BaseException | None, attempts: int
+    ) -> str:
+        original_error = (
+            self._technical_error_detail(exc)
+            if exc is not None
+            else "unknown connection error"
+        )
+        normalized = original_error.lower()
+        if (
+            "unexpected_eof_while_reading" in normalized
+            or "eof occurred in violation of protocol" in normalized
+        ):
+            cause = "TLS connection closed while reading the translation response"
+        elif "timed out" in normalized or "timeout" in normalized:
+            cause = "translation request timed out"
+        elif "remote end closed connection" in normalized:
+            cause = "remote server closed the translation connection"
+        else:
+            cause = "translation API connection failed"
+
+        message = (
+            f"translation request failed after {attempts} attempts: {cause}. "
+            "Check the API endpoint, proxy or VPN, network stability, and provider status. "
+            f"Original error: {original_error}"
+        )
+        return self._redact_secrets(message)
+
+    def _format_non_retryable_request_error(self, exc: BaseException) -> str:
+        original_error = self._technical_error_detail(exc)
+        normalized = original_error.lower()
+        if "certificate" in normalized or "cert" in normalized:
+            cause = "translation API TLS certificate verification failed"
+            guidance = (
+                "Check the API endpoint URL, proxy certificate, system trust store, "
+                "or use a provider endpoint with a valid HTTPS certificate."
+            )
+        else:
+            cause = "translation API connection failed"
+            guidance = "Check the API endpoint, network, proxy, and provider status."
+        return self._redact_secrets(
+            f"translation request failed: {cause}. {guidance} Original error: {original_error}"
+        )
+
+    @staticmethod
+    def _technical_error_detail(exc: BaseException) -> str:
+        if isinstance(exc, error.URLError):
+            reason = exc.reason
+            if isinstance(reason, BaseException):
+                return f"{reason.__class__.__name__}: {reason}"
+            return str(reason)
+        return f"{exc.__class__.__name__}: {exc}"
 
     def _format_http_error(self, exc: error.HTTPError) -> str:
         status_code = exc.code
