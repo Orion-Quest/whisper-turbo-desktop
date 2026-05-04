@@ -4,6 +4,7 @@ import importlib
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import torch
 import whisper
@@ -124,13 +125,7 @@ class TranscriptionWorker(QThread):
 
             self.state_changed.emit("Running Whisper...")
             transcribe_module.tqdm.tqdm = WhisperProgressBar
-            result = model.transcribe(
-                str(self.request.input_path),
-                task=self.request.task,
-                language=self.request.language,
-                verbose=False,
-                fp16=device == "cuda",
-            )
+            result = self._transcribe_audio(model, task=self.request.task, device=device)
 
             if self._cancel_requested:
                 raise TranscriptionCancelled("Task cancelled")
@@ -139,7 +134,7 @@ class TranscriptionWorker(QThread):
             writer = get_writer(self.request.output_format, str(self.request.output_dir))
             writer(result, str(self.request.input_path))
 
-            self._write_translated_outputs(result)
+            self._write_translated_outputs(result, model=model, device=device)
 
             output_files = self.request.collect_output_files()
             if not output_files:
@@ -184,9 +179,23 @@ class TranscriptionWorker(QThread):
             return "cuda" if torch.cuda.is_available() else "cpu"
         return self.request.device
 
-    def _write_translated_outputs(self, result: dict) -> None:
+    def _transcribe_audio(self, model: Any, *, task: str, device: str) -> dict[str, Any]:
+        return model.transcribe(
+            str(self.request.input_path),
+            task=task,
+            language=self.request.language,
+            verbose=False,
+            fp16=device == "cuda",
+        )
+
+    def _write_translated_outputs(
+        self, result: dict[str, Any], *, model: Any, device: str
+    ) -> None:
         if not self.request.translation_enabled:
             return
+        source_result = self._translation_source_result(
+            result, model=model, device=device
+        )
         segments = [
             SubtitleSegment(
                 index=index + 1,
@@ -194,16 +203,19 @@ class TranscriptionWorker(QThread):
                 end=float(segment["end"]),
                 text=str(segment["text"]),
             )
-            for index, segment in enumerate(result.get("segments", []))
+            for index, segment in enumerate(source_result.get("segments", []))
         ]
         if not segments:
-            return
+            raise RuntimeError(
+                "Translation was enabled, but Whisper did not return subtitle segments"
+            )
 
         translator = SubtitleTranslationService(
             api_key=self.request.translation_api_key,
             base_url=self.request.translation_base_url,
             model=self.request.translation_model,
             target_language=self.request.translation_target_language,
+            source_language=self.request.language,
         )
         translated = translator.translate_segments(segments)
         stem = self.request.input_path.stem
@@ -213,3 +225,17 @@ class TranscriptionWorker(QThread):
         srt_path.write_text(translated.srt_text, encoding="utf-8")
         vtt_path.write_text(translated.vtt_text, encoding="utf-8")
         txt_path.write_text(translated.txt_text, encoding="utf-8")
+
+    def _translation_source_result(
+        self, result: dict[str, Any], *, model: Any, device: str
+    ) -> dict[str, Any]:
+        if self.request.task != "translate":
+            return result
+
+        self.state_changed.emit(
+            "Transcribing source-language text for translated subtitles..."
+        )
+        source_result = self._transcribe_audio(model, task="transcribe", device=device)
+        if self._cancel_requested:
+            raise TranscriptionCancelled("Task cancelled")
+        return source_result

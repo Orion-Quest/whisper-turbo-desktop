@@ -10,6 +10,8 @@ SUPPORTED_DEVICES = {"auto", "cpu", "cuda"}
 SUPPORTED_MODELS = [
     "turbo",
 ]
+COLLECTABLE_OUTPUT_SUFFIXES = {".txt", ".srt", ".vtt", ".json", ".tsv"}
+TRANSLATED_OUTPUT_SUFFIXES = {".txt", ".srt", ".vtt"}
 
 
 @dataclass(slots=True)
@@ -81,10 +83,12 @@ class TranscriptionRequest:
 
     def collect_output_files(self) -> list[Path]:
         stem = self.input_path.stem
+        translated_stem = f"{stem}.translated"
         candidates: list[Path] = []
         for path in self.output_dir.glob(f"{stem}.*"):
-            if path.stem != stem:
-                continue
-            if path.suffix.lower() in {".txt", ".srt", ".vtt", ".json", ".tsv"}:
+            suffix = path.suffix.lower()
+            if path.stem == stem and suffix in COLLECTABLE_OUTPUT_SUFFIXES:
+                candidates.append(path)
+            if path.stem == translated_stem and suffix in TRANSLATED_OUTPUT_SUFFIXES:
                 candidates.append(path)
         return sorted(candidates)
