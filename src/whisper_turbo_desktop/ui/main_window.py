@@ -146,6 +146,25 @@ class MainWindow(QMainWindow):
         self.source_language_edit.setPlaceholderText("Leave empty for auto detection, e.g. Chinese or en")
         form.addRow("Source Language", self.source_language_edit)
 
+        self.translation_settings_group = QGroupBox("Translation Settings")
+        translation_form = QFormLayout(self.translation_settings_group)
+        self.translation_target_language_edit = QLineEdit()
+        self.translation_target_language_edit.setPlaceholderText("Optional subtitle target, e.g. Spanish or ja")
+        translation_form.addRow("Target Subtitle Language", self.translation_target_language_edit)
+
+        self.translation_api_key_edit = QLineEdit()
+        self.translation_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.translation_api_key_edit.setPlaceholderText("OpenAI-compatible API key")
+        translation_form.addRow("API Key", self.translation_api_key_edit)
+
+        self.translation_base_url_edit = QLineEdit()
+        self.translation_base_url_edit.setPlaceholderText("https://api.openai.com/v1 or full chat endpoint")
+        translation_form.addRow("Endpoint", self.translation_base_url_edit)
+
+        self.translation_model_edit = QLineEdit()
+        self.translation_model_edit.setPlaceholderText("gpt-4o-mini")
+        translation_form.addRow("Model", self.translation_model_edit)
+
         self.device_combo = QComboBox()
         self.device_combo.addItems(["auto", "cuda", "cpu"])
         form.addRow("Device", self.device_combo)
@@ -199,6 +218,7 @@ class MainWindow(QMainWindow):
         status.addWidget(self.progress_detail_label)
 
         layout.addWidget(task_group)
+        layout.addWidget(self.translation_settings_group)
         layout.addWidget(actions_group)
         layout.addWidget(status_group)
         layout.addStretch(1)
@@ -290,6 +310,10 @@ class MainWindow(QMainWindow):
         output_dir = self.settings.default_output_dir or str(Path.home() / "Documents" / "Whisper Outputs")
         self.output_dir_edit.setText(output_dir)
         self.source_language_edit.setText(self.settings.default_source_language)
+        self.translation_api_key_edit.setText(self.settings.translation_api_key)
+        self.translation_base_url_edit.setText(self.settings.translation_base_url)
+        self.translation_model_edit.setText(self.settings.translation_model)
+        self.translation_target_language_edit.setText(self.settings.translation_target_language)
         self.runtime_path_edit.setText(sys.executable)
         self._set_combo_value(self.model_combo, self.settings.default_model)
         self._set_combo_value(self.output_language_combo, self.settings.default_output_language)
@@ -305,6 +329,10 @@ class MainWindow(QMainWindow):
             default_source_language=self.source_language_edit.text().strip(),
             default_device=self.device_combo.currentText(),
             default_output_format=self.output_format_combo.currentText(),
+            translation_api_key=self.translation_api_key_edit.text().strip(),
+            translation_base_url=self.translation_base_url_edit.text().strip(),
+            translation_model=self.translation_model_edit.text().strip(),
+            translation_target_language=self.translation_target_language_edit.text().strip(),
         )
         self.settings_service.save(settings)
         self.settings = settings
@@ -607,6 +635,11 @@ class MainWindow(QMainWindow):
             device=self.device_combo.currentText(),
             output_format=self.output_format_combo.currentText(),
             python_executable=sys.executable,
+            translation_enabled=bool(self.translation_target_language_edit.text().strip()),
+            translation_api_key=self.translation_api_key_edit.text().strip(),
+            translation_base_url=self.translation_base_url_edit.text().strip(),
+            translation_model=self.translation_model_edit.text().strip(),
+            translation_target_language=self.translation_target_language_edit.text().strip(),
         )
 
     def _launch_request(self, request: TranscriptionRequest, *, origin: str, queue_task_id: str | None = None) -> None:

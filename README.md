@@ -16,6 +16,7 @@ The project now uses a two-stage release model:
 - `Source Language` input plus `Output Language` selection
 - `Output Language = Original` maps to Whisper `transcribe`
 - `Output Language = English (Translate)` maps to Whisper `translate`
+- Optional OpenAI-compatible subtitle translation settings
 - Real progress display during transcription
 - Runtime model download on first use
 - History view with double-click open for output file or folder
@@ -93,6 +94,19 @@ whisper-turbo-desktop
 4. Click `Run Current`.
 5. If the model is not cached yet, Whisper will download it automatically.
 6. Double-click an output file to open it.
+
+### Subtitle Translation Settings
+
+`Output Language` keeps its existing behavior: `Original` transcribes in the spoken language, and `English (Translate)` uses Whisper's English translate mode.
+
+To prepare the optional OpenAI-compatible subtitle translation path, fill in `Translation Settings`:
+
+- `Target Subtitle Language`: desired subtitle language, such as `Spanish` or `Japanese`
+- `API Key`: provider key
+- `Endpoint`: OpenAI-compatible API root such as `https://api.openai.com/v1`, or a full `.../chat/completions` endpoint
+- `Model`: translation model name, for example `gpt-4o-mini`
+
+These values are saved with the rest of the app settings and applied to new runs and queued items.
 
 ### Batch Queue
 
