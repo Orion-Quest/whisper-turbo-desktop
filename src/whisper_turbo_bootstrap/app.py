@@ -38,6 +38,8 @@ from tkinter import Tk, messagebox, ttk
 APP_NAME = "Whisper Turbo Desktop"
 INSTALL_DIR_NAME = "WhisperTurboDesktop"
 MANIFEST_FILENAME = "release-manifest.json"
+DOWNLOAD_CHUNK_BYTES = 1024 * 256
+DOWNLOAD_TIMEOUT_SECONDS = 60
 
 
 def python_https_error() -> str | None:
@@ -260,24 +262,43 @@ class BootstrapLauncher:
 
         return archive_path
 
-    def _download_file(self, url: str, destination: Path, expected_sha256: str, expected_size: int) -> None:
+    def _download_file(
+        self, url: str, destination: Path, expected_sha256: str, expected_size: int
+    ) -> None:
         ensure_https_support()
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if self._cached_download_is_valid(destination, expected_sha256, expected_size):
+            self.ui.set_progress(100)
+            return
+        if destination.exists():
+            destination.unlink()
+
+        temp_destination = destination.with_name(f"{destination.name}.download")
+        if temp_destination.exists():
+            temp_destination.unlink()
+
         try:
-            with urllib.request.urlopen(url) as response, destination.open("wb") as output:
+            with (
+                urllib.request.urlopen(
+                    url, timeout=DOWNLOAD_TIMEOUT_SECONDS
+                ) as response,
+                temp_destination.open("wb") as output,
+            ):
                 total = int(response.headers.get("Content-Length") or expected_size or 0)
                 downloaded = 0
                 while True:
-                    chunk = response.read(1024 * 256)
+                    chunk = response.read(DOWNLOAD_CHUNK_BYTES)
                     if not chunk:
                         break
                     output.write(chunk)
                     downloaded += len(chunk)
                     if total > 0:
                         self.ui.set_progress(int(downloaded * 100 / total))
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            temp_destination.unlink(missing_ok=True)
             raise RuntimeError(f"Download failed: {url}\n{exc}") from exc
 
+        temp_destination.replace(destination)
         self.ui.set_progress(100)
 
         digest = file_sha256(destination)
@@ -290,6 +311,16 @@ class BootstrapLauncher:
 
     def download_root(self) -> Path:
         return self.install_root / "downloads"
+
+    @staticmethod
+    def _cached_download_is_valid(
+        destination: Path, expected_sha256: str, expected_size: int
+    ) -> bool:
+        if not destination.exists():
+            return False
+        if expected_size > 0 and destination.stat().st_size != expected_size:
+            return False
+        return file_sha256(destination) == expected_sha256
 
     def _install_runtime(self, archive_path: Path, temp_root: Path) -> None:
         self.ui.set_status("Extracting runtime package...")
@@ -356,7 +387,9 @@ class BootstrapLauncher:
 
 def install_root_dir() -> Path:
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        exe_parent = Path(sys.executable).resolve().parent
+        if exe_parent.name.lower() == INSTALL_DIR_NAME.lower():
+            return exe_parent
     local_appdata = os.environ.get("LOCALAPPDATA")
     if local_appdata:
         return Path(local_appdata) / "Programs" / INSTALL_DIR_NAME

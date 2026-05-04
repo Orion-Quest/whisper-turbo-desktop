@@ -24,6 +24,20 @@ def test_install_root_dir_uses_bootstrap_exe_parent_when_frozen(
     assert app.install_root_dir() == Path(r"D:\Apps\WhisperTurboDesktop")
 
 
+def test_standalone_downloaded_bootstrap_uses_stable_local_appdata_install_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        app.sys, "executable", r"C:\Users\tester\Downloads\WhisperTurboDesktop.exe"
+    )
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\tester\AppData\Local")
+
+    assert app.install_root_dir() == Path(
+        r"C:\Users\tester\AppData\Local\Programs\WhisperTurboDesktop"
+    )
+
+
 def test_download_bundle_uses_persistent_download_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     manifest = app.ReleaseManifest(
         version="1.0",
@@ -97,10 +111,47 @@ def test_checksum_mismatch_reports_expected_and_actual(monkeypatch: pytest.Monke
         def read(self, _size: int) -> bytes:
             return self._chunks.pop(0)
 
-    monkeypatch.setattr(app.urllib.request, "urlopen", lambda _url: FakeResponse())
+    monkeypatch.setattr(
+        app.urllib.request,
+        "urlopen",
+        lambda _url, timeout=0: FakeResponse(),
+    )
     monkeypatch.setattr(app, "file_sha256", lambda _path: "actual")
 
     with pytest.raises(RuntimeError, match="expected expected, got actual"):
         launcher._download_file("https://example.test/asset.zip", destination, "expected", 3)
 
     assert not destination.exists()
+
+
+def test_download_file_reuses_valid_cached_asset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    destination = tmp_path / "asset.zip"
+    destination.write_bytes(b"ok")
+    progress_values: list[int] = []
+    launcher = app.BootstrapLauncher(
+        SimpleNamespace(set_progress=progress_values.append),
+        app.ReleaseManifest(
+            version="1.0",
+            tag="v1.0",
+            repo_owner="owner",
+            repo_name="repo",
+            required_disk_space_bytes=1,
+            runtime_entry_relative_path="runtime/WhisperTurboDesktop.exe",
+            ffmpeg_relative_path="tools/ffmpeg/bin/ffmpeg.exe",
+            runtime_bundle=app.ReleaseBundle("runtime.zip", "unused", 0, []),
+            ffmpeg_bundle=app.ReleaseBundle("ffmpeg.zip", "unused", 0, []),
+        ),
+    )
+
+    def fail_urlopen(_url: str, timeout: int = 0):
+        raise AssertionError("valid cached downloads should not be fetched again")
+
+    monkeypatch.setattr(app.urllib.request, "urlopen", fail_urlopen)
+    monkeypatch.setattr(app, "file_sha256", lambda _path: "expected")
+
+    launcher._download_file("https://example.test/asset.zip", destination, "expected", 2)
+
+    assert progress_values == [100]
+    assert destination.read_bytes() == b"ok"
