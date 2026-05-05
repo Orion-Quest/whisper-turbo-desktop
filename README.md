@@ -1,20 +1,43 @@
 # Whisper Turbo Desktop
 
-Windows-only desktop GUI for local `openai/whisper` transcription, Whisper English translation, and optional OpenAI-compatible subtitle translation to other languages.
+Windows desktop app for local `openai/whisper` transcription, Whisper English translation, and optional OpenAI-compatible subtitle translation to other languages.
 
-The project now uses a two-stage release model:
+## What It Does
 
-- Users download a small bootstrap installer
-- On first launch, the bootstrap downloads the runtime package and `ffmpeg`
-- On first actual transcription, Whisper downloads the `turbo` model if it is not already cached
+Whisper Turbo Desktop turns audio or video files into text and subtitle files through a desktop workflow. The normal Whisper output stays local, and an optional API translation step can create translated subtitle sidecars when you want subtitles in another language.
+
+Typical output files include `txt`, `srt`, `vtt`, `json`, and `tsv`. Optional API subtitle translation adds:
+
+- `<name>.translated.srt`
+- `<name>.translated.vtt`
+- `<name>.translated.txt`
+
+## Typical Uses
+
+- Foreign language learning: create original-language subtitles, translated subtitles, listening practice material, and review text for vocabulary or shadowing.
+- Subtitle production: generate draft `srt`/`vtt` files for videos, courses, clips, podcasts, and social media edits.
+- Local transcription: convert meetings, lectures, interviews, voice notes, or recordings into searchable text.
+- Bilingual study material: keep Whisper's original transcript while adding a translated sidecar for comparison.
+- Accessibility and content review: produce readable captions and text previews before editing or publishing media.
+
+## Quick Start
+
+1. Download `WhisperTurboDesktop-Bootstrap-Setup-<version>.exe` from the GitHub Release page.
+2. Run the installer and launch `Whisper Turbo Desktop`.
+3. Choose or drop one audio/video file.
+4. Select an output folder and choose `Whisper Mode`.
+5. Optional: configure API subtitle translation if you want translated subtitle sidecars.
+6. Click `Run Current`.
+
+The first launch downloads the packaged runtime and managed `ffmpeg`. The first transcription may also download Whisper's `turbo` model if it is not already cached.
 
 ## Download And Install
 
-For normal Windows use, download only:
+For normal Windows use, download only the bootstrap installer:
 
 - `WhisperTurboDesktop-Bootstrap-Setup-<version>.exe`
 
-from the GitHub Release page. Run that installer, then launch `Whisper Turbo Desktop`. The bootstrap launcher downloads the matching runtime and managed `ffmpeg` payload automatically on first launch.
+Run that installer, then launch `Whisper Turbo Desktop`. The bootstrap launcher downloads the matching runtime and managed `ffmpeg` payload automatically on first launch.
 
 The runtime ZIP, runtime `.part###` files, `ffmpeg` ZIP, manifest, and checksums are release support assets used by the bootstrap launcher. If a runtime ZIP is split into parts, every generated part must stay uploaded under the same release tag because the manifest references them by exact filename, size, and SHA-256 hash.
 
@@ -35,7 +58,7 @@ The runtime ZIP, runtime `.part###` files, `ffmpeg` ZIP, manifest, and checksums
 - Output preview for `txt`, `srt`, `vtt`, `json`, and `tsv`
 - Runtime checks for managed `ffmpeg`, `whisper`, `torch`, `CUDA`, and model cache state
 
-## Runtime Download Strategy
+## How Downloads Work
 
 ### First Launch
 
@@ -46,13 +69,13 @@ The installed bootstrap launcher downloads:
 
 into the local application install directory.
 
-If the launcher is run directly from a download folder, the runtime is installed under `%LOCALAPPDATA%\\Programs\\WhisperTurboDesktop` instead of beside the downloaded `.exe`. Completed downloads are cached and reused after size/hash validation; incomplete downloads are written as temporary `.download` files and are only promoted after the transfer finishes.
+If the launcher is run directly from a download folder, the runtime is installed under `%LOCALAPPDATA%\Programs\WhisperTurboDesktop` instead of beside the downloaded `.exe`. Completed downloads are cached and reused after size/hash validation; incomplete downloads are written as temporary `.download` files and are only promoted after the transfer finishes.
 
 ### First Transcription
 
 Whisper downloads the `turbo` model into:
 
-- `%USERPROFILE%\\.cache\\whisper`
+- `%USERPROFILE%\.cache\whisper`
 
 if the model is not already cached.
 
@@ -99,14 +122,14 @@ python -m pip install -e .
 whisper-turbo-desktop
 ```
 
-## How To Use
+## How To Use The App
 
 ### Single Run
 
 1. Choose or drop one media file.
 2. Set `Spoken Language` if you want to skip auto-detection.
 3. Choose `Whisper Mode`.
-4. Optionally fill in `Optional API Subtitle Translation` if you want translated subtitle sidecars.
+4. Optionally fill in `Optional API Subtitle Translation` if you want translated subtitle sidecars for study, review, or publishing.
 5. Click `Run Current`.
 6. If the model is not cached yet, Whisper will download it automatically.
 7. Double-click an output file to open it.
@@ -152,7 +175,7 @@ Likely low-confidence Whisper text is marked in the API payload so the provider 
 ### History
 
 - Completed, failed, and cancelled runs are written to:
-  - `%APPDATA%\\WhisperTurboDesktop\\history.json`
+  - `%APPDATA%\WhisperTurboDesktop\history.json`
 - History rows visually separate run time, completed/failed/cancelled status, duration, task/model, and input filename.
 - Double-click a history item to open the first available output file.
 - If the output file is missing, the app opens the recorded output folder instead.
