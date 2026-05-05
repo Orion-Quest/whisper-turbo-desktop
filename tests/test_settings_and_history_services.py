@@ -25,6 +25,7 @@ def test_settings_service_recovers_from_invalid_json(tmp_path: Path, monkeypatch
     assert settings.default_source_language == ""
     assert settings.default_device == "auto"
     assert settings.default_output_format == "srt"
+    assert settings.theme == "Aurora Glass"
 
 
 def test_settings_service_loads_translation_provider_fields(
@@ -49,6 +50,7 @@ def test_settings_service_loads_translation_provider_fields(
                 "translation_base_url": "https://api.example.com/v1",
                 "translation_model": "gpt-4o-mini",
                 "translation_target_language": "Spanish",
+                "theme": "Slate Glass",
             }
         ),
         encoding="utf-8",
@@ -60,6 +62,7 @@ def test_settings_service_loads_translation_provider_fields(
     assert settings.translation_base_url == "https://api.example.com/v1"
     assert settings.translation_model == "gpt-4o-mini"
     assert settings.translation_target_language == "Spanish"
+    assert settings.theme == "Slate Glass"
 
 
 def test_history_service_recovers_from_invalid_json(tmp_path: Path, monkeypatch) -> None:

@@ -41,5 +41,7 @@
 - Upload `ffmpeg` ZIP
 - Upload release manifest and checksums
 - Release notes must clearly state:
+  - end users should download the bootstrap installer
   - bootstrap downloads runtime and `ffmpeg` on first launch
   - Whisper downloads the model on first transcription
+  - all runtime parts must be uploaded together when the runtime archive is split

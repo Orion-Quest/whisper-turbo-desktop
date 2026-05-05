@@ -27,6 +27,7 @@ class AppSettings:
     translation_base_url: str = "https://api.openai.com/v1"
     translation_model: str = "gpt-4o-mini"
     translation_target_language: str = ""
+    theme: str = "Aurora Glass"
 
 
 class SettingsService:
@@ -91,6 +92,7 @@ class SettingsService:
             translation_target_language=payload.get(
                 "translation_target_language", ""
             ),
+            theme=payload.get("theme", "Aurora Glass"),
         )
 
     @staticmethod

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Sequence
 
@@ -38,11 +38,8 @@ from tkinter import Tk, messagebox, ttk
 APP_NAME = "Whisper Turbo Desktop"
 INSTALL_DIR_NAME = "WhisperTurboDesktop"
 MANIFEST_FILENAME = "release-manifest.json"
-
-
-class DownloadBackend(Enum):
-    PYTHON = "python"
-    CURL = "curl"
+DOWNLOAD_CHUNK_BYTES = 1024 * 256
+DOWNLOAD_TIMEOUT_SECONDS = 60
 
 
 def python_https_error() -> str | None:
@@ -53,53 +50,15 @@ def python_https_error() -> str | None:
     return None
 
 
-def curl_executable() -> str | None:
-    return shutil.which("curl.exe") or shutil.which("curl")
-
-
-def select_download_backend() -> tuple[DownloadBackend, str | None]:
-    https_error = python_https_error()
-    if https_error is None:
-        return DownloadBackend.PYTHON, None
-
-    curl_path = curl_executable()
-    if curl_path is not None:
-        return DownloadBackend.CURL, curl_path
-
-    raise RuntimeError(
-        "HTTPS downloads are unavailable. "
-        f"{https_error}, and no curl executable was found for fallback downloads."
-    )
-
-
 def ensure_https_support() -> None:
-    select_download_backend()
+    https_error = python_https_error()
+    if https_error is not None:
+        raise RuntimeError(f"HTTPS downloads are unavailable. {https_error}.")
 
 
 def _release_self_test() -> int:
-    select_download_backend()
+    ensure_https_support()
     return 0
-
-
-def _run_curl_download(url: str, destination: Path, curl_path: str) -> None:
-    command = [
-        curl_path,
-        "--location",
-        "--fail",
-        "--silent",
-        "--show-error",
-        "--output",
-        str(destination),
-        url,
-    ]
-    result = subprocess.run(command, capture_output=True, text=True)
-    if result.returncode != 0:
-        details = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(
-            f"Download failed: {url}\n"
-            f"curl exited with code {result.returncode}"
-            + (f": {details}" if details else "")
-        )
 
 
 @dataclass(slots=True)
@@ -279,7 +238,8 @@ class BootstrapLauncher:
 
     def _download_bundle(self, label: str, bundle: ReleaseBundle, temp_root: Path) -> Path:
         self.ui.set_status(f"Downloading {label} package...")
-        part_dir = temp_root / f"{label}_parts"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        part_dir = self.download_root() / label
         part_dir.mkdir(parents=True, exist_ok=True)
 
         part_paths: list[Path] = []
@@ -302,32 +262,65 @@ class BootstrapLauncher:
 
         return archive_path
 
-    def _download_file(self, url: str, destination: Path, expected_sha256: str, expected_size: int) -> None:
-        backend, curl_path = select_download_backend()
-        if backend is DownloadBackend.PYTHON:
-            try:
-                with urllib.request.urlopen(url) as response, destination.open("wb") as output:
-                    total = int(response.headers.get("Content-Length") or expected_size or 0)
-                    downloaded = 0
-                    while True:
-                        chunk = response.read(1024 * 256)
-                        if not chunk:
-                            break
-                        output.write(chunk)
-                        downloaded += len(chunk)
-                        if total > 0:
-                            self.ui.set_progress(int(downloaded * 100 / total))
-            except urllib.error.URLError as exc:
-                raise RuntimeError(f"Download failed: {url}\n{exc}") from exc
-        elif curl_path is not None:
-            self.ui.set_detail(f"{destination.name} (curl fallback)")
-            _run_curl_download(url, destination, curl_path)
+    def _download_file(
+        self, url: str, destination: Path, expected_sha256: str, expected_size: int
+    ) -> None:
+        ensure_https_support()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if self._cached_download_is_valid(destination, expected_sha256, expected_size):
             self.ui.set_progress(100)
+            return
+        if destination.exists():
+            destination.unlink()
+
+        temp_destination = destination.with_name(f"{destination.name}.download")
+        if temp_destination.exists():
+            temp_destination.unlink()
+
+        try:
+            with (
+                urllib.request.urlopen(
+                    url, timeout=DOWNLOAD_TIMEOUT_SECONDS
+                ) as response,
+                temp_destination.open("wb") as output,
+            ):
+                total = int(response.headers.get("Content-Length") or expected_size or 0)
+                downloaded = 0
+                while True:
+                    chunk = response.read(DOWNLOAD_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    output.write(chunk)
+                    downloaded += len(chunk)
+                    if total > 0:
+                        self.ui.set_progress(int(downloaded * 100 / total))
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            temp_destination.unlink(missing_ok=True)
+            raise RuntimeError(f"Download failed: {url}\n{exc}") from exc
+
+        temp_destination.replace(destination)
+        self.ui.set_progress(100)
 
         digest = file_sha256(destination)
         if digest != expected_sha256:
             destination.unlink(missing_ok=True)
-            raise RuntimeError(f"Checksum mismatch for {destination.name}")
+            raise RuntimeError(
+                f"Checksum mismatch for {destination.name}: expected {expected_sha256}, got {digest}. "
+                "The corrupt file was removed. Start the launcher again to retry the download."
+            )
+
+    def download_root(self) -> Path:
+        return self.install_root / "downloads"
+
+    @staticmethod
+    def _cached_download_is_valid(
+        destination: Path, expected_sha256: str, expected_size: int
+    ) -> bool:
+        if not destination.exists():
+            return False
+        if expected_size > 0 and destination.stat().st_size != expected_size:
+            return False
+        return file_sha256(destination) == expected_sha256
 
     def _install_runtime(self, archive_path: Path, temp_root: Path) -> None:
         self.ui.set_status("Extracting runtime package...")
@@ -393,6 +386,10 @@ class BootstrapLauncher:
 
 
 def install_root_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        exe_parent = Path(sys.executable).resolve().parent
+        if exe_parent.name.lower() == INSTALL_DIR_NAME.lower():
+            return exe_parent
     local_appdata = os.environ.get("LOCALAPPDATA")
     if local_appdata:
         return Path(local_appdata) / "Programs" / INSTALL_DIR_NAME

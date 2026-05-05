@@ -65,6 +65,8 @@ def test_queue_progress_and_state_updates_refresh_active_row_in_place(monkeypatc
         assert render_calls == []
         assert window.queue_list.item(0).text() == "RUNNING   |   0% | clip.wav"
         assert "Note: Transcribing" in window.queue_detail_text.toPlainText()
+        assert "Whisper Mode: Original (Whisper transcribe)" in window.queue_detail_text.toPlainText()
+        assert "API Subtitle Translation: Off" in window.queue_detail_text.toPlainText()
 
         window._on_worker_progress_changed(42)
         assert render_calls == []

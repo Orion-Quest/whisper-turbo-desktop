@@ -236,7 +236,13 @@ $runtimeBundle = $bundleMetadata.runtime_bundle
 $ffmpegBundle = $bundleMetadata.ffmpeg_bundle
 Remove-Item "$releaseRoot\bundle-metadata.json" -Force
 
-$requiredDiskSpaceBytes = [int64]($runtimeBundle.archive_size + $ffmpegBundle.archive_size + 1073741824)
+$runtimePartsSize = [int64](($runtimeBundle.parts | Measure-Object -Property size -Sum).Sum)
+$ffmpegPartsSize = [int64](($ffmpegBundle.parts | Measure-Object -Property size -Sum).Sum)
+$downloadCacheBytes = $runtimePartsSize + $ffmpegPartsSize
+$mergedArchiveBytes = [int64]($runtimeBundle.archive_size + $ffmpegBundle.archive_size)
+$extractEstimateBytes = [int64]($runtimeBundle.archive_size + $ffmpegBundle.archive_size)
+$upgradeBufferBytes = [int64]1073741824
+$requiredDiskSpaceBytes = [int64]($downloadCacheBytes + $mergedArchiveBytes + $extractEstimateBytes + $upgradeBufferBytes)
 $manifestPath = Join-Path $releaseRoot "release-manifest-$version.json"
 $bootstrapManifestPath = Join-Path $bootstrapReleaseDir "release-manifest.json"
 
