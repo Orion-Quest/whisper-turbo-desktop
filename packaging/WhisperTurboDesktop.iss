@@ -1,7 +1,7 @@
 ; Whisper Turbo Desktop bootstrap installer
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.2.6"
+  #define MyAppVersion "0.2.7"
 #endif
 #ifndef MySourceDir
   #define MySourceDir "..\release\bootstrap"
