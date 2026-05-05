@@ -12,6 +12,18 @@ Typical output files include `txt`, `srt`, `vtt`, `json`, and `tsv`. Optional AP
 - `<name>.translated.vtt`
 - `<name>.translated.txt`
 
+## Quick Links
+
+- [Download latest Windows installer](https://github.com/Orion-Quest/whisper-turbo-desktop/releases)
+- [Quick Start](#quick-start)
+- [Download And Install](#download-and-install)
+- [How To Use The App](#how-to-use-the-app)
+- [Optional API Subtitle Translation](#optional-api-subtitle-translation)
+- [Batch Queue](#batch-queue)
+- [History](#history)
+- [Build And Distribution](#build-and-distribution)
+- [Release Checklist](docs/RELEASE_CHECKLIST.md)
+
 ## Typical Uses
 
 - Foreign language learning: create original-language subtitles, translated subtitles, listening practice material, and review text for vocabulary or shadowing.
@@ -22,7 +34,7 @@ Typical output files include `txt`, `srt`, `vtt`, `json`, and `tsv`. Optional AP
 
 ## Quick Start
 
-1. Download `WhisperTurboDesktop-Bootstrap-Setup-<version>.exe` from the GitHub Release page.
+1. Download `WhisperTurboDesktop-Bootstrap-Setup-<version>.exe` from the [GitHub Release page](https://github.com/Orion-Quest/whisper-turbo-desktop/releases).
 2. Run the installer and launch `Whisper Turbo Desktop`.
 3. Choose or drop one audio/video file.
 4. Select an output folder and choose `Whisper Mode`.
@@ -34,7 +46,7 @@ After the managed runtime is installed, later launches start the desktop app dir
 
 ## Download And Install
 
-For normal Windows use, download only the bootstrap installer:
+For normal Windows use, download only the bootstrap installer from [GitHub Releases](https://github.com/Orion-Quest/whisper-turbo-desktop/releases):
 
 - `WhisperTurboDesktop-Bootstrap-Setup-<version>.exe`
 
