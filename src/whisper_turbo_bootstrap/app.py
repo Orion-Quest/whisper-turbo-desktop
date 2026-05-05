@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +43,14 @@ INSTALL_DIR_NAME = "WhisperTurboDesktop"
 MANIFEST_FILENAME = "release-manifest.json"
 DOWNLOAD_CHUNK_BYTES = 1024 * 256
 DOWNLOAD_TIMEOUT_SECONDS = 60
+DOWNLOAD_RETRY_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
+DOWNLOAD_USER_AGENT = "WhisperTurboDesktop-Bootstrap"
+RETRYABLE_DOWNLOAD_EXCEPTIONS = (
+    urllib.error.URLError,
+    TimeoutError,
+    OSError,
+    http.client.HTTPException,
+)
 
 
 def python_https_error() -> str | None:
@@ -327,18 +337,66 @@ class BootstrapLauncher:
             destination.unlink()
 
         temp_destination = destination.with_name(f"{destination.name}.download")
-        if temp_destination.exists():
-            temp_destination.unlink()
+        last_error = "download did not start"
+        attempts = len(DOWNLOAD_RETRY_BACKOFF_SECONDS) + 1
+        for attempt_index in range(attempts):
+            try:
+                if self._promote_verified_download(
+                    temp_destination, destination, expected_sha256, expected_size
+                ):
+                    return
+                self._download_file_once(url, temp_destination, expected_size)
+                if self._promote_verified_download(
+                    temp_destination, destination, expected_sha256, expected_size
+                ):
+                    return
+                actual_size = temp_destination.stat().st_size if temp_destination.exists() else 0
+                last_error = (
+                    f"incomplete download: received {actual_size} of {expected_size} bytes"
+                )
+            except RETRYABLE_DOWNLOAD_EXCEPTIONS as exc:
+                last_error = str(exc)
+            if attempt_index < attempts - 1:
+                time.sleep(DOWNLOAD_RETRY_BACKOFF_SECONDS[attempt_index])
 
-        try:
-            with (
-                urllib.request.urlopen(
-                    url, timeout=DOWNLOAD_TIMEOUT_SECONDS
-                ) as response,
-                temp_destination.open("wb") as output,
-            ):
-                total = int(response.headers.get("Content-Length") or expected_size or 0)
+        partial_note = ""
+        if temp_destination.exists():
+            partial_note = (
+                f"\nPartial download kept at {temp_destination}. "
+                "Start the launcher again to resume it."
+            )
+        raise RuntimeError(
+            f"Download failed after {attempts} attempts: {url}\nLast error: {last_error}"
+            f"{partial_note}"
+        )
+
+    def _download_file_once(self, url: str, temp_destination: Path, expected_size: int) -> None:
+        downloaded = temp_destination.stat().st_size if temp_destination.exists() else 0
+        if expected_size > 0 and downloaded > expected_size:
+            temp_destination.unlink()
+            downloaded = 0
+        if expected_size > 0 and downloaded == expected_size:
+            self.ui.set_progress(100)
+            return
+
+        headers = {
+            "Accept": "application/octet-stream",
+            "User-Agent": DOWNLOAD_USER_AGENT,
+        }
+        if downloaded > 0:
+            headers["Range"] = f"bytes={downloaded}-"
+        request = urllib.request.Request(url, headers=headers)
+
+        with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
+            response_code = response.getcode() if hasattr(response, "getcode") else None
+            append_download = downloaded > 0 and response_code == 206
+            if downloaded > 0 and not append_download:
+                temp_destination.unlink(missing_ok=True)
                 downloaded = 0
+
+            mode = "ab" if append_download else "wb"
+            total = expected_size or int(response.headers.get("Content-Length") or 0)
+            with temp_destination.open(mode) as output:
                 while True:
                     chunk = response.read(DOWNLOAD_CHUNK_BYTES)
                     if not chunk:
@@ -347,20 +405,37 @@ class BootstrapLauncher:
                     downloaded += len(chunk)
                     if total > 0:
                         self.ui.set_progress(int(downloaded * 100 / total))
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+
+    def _promote_verified_download(
+        self,
+        temp_destination: Path,
+        destination: Path,
+        expected_sha256: str,
+        expected_size: int,
+    ) -> bool:
+        if not temp_destination.exists():
+            return False
+        actual_size = temp_destination.stat().st_size
+        if expected_size > 0 and actual_size < expected_size:
+            return False
+        if expected_size > 0 and actual_size > expected_size:
             temp_destination.unlink(missing_ok=True)
-            raise RuntimeError(f"Download failed: {url}\n{exc}") from exc
+            raise RuntimeError(
+                f"Downloaded file is larger than expected for {destination.name}: "
+                f"expected {expected_size}, got {actual_size}. The corrupt file was removed."
+            )
 
-        temp_destination.replace(destination)
-        self.ui.set_progress(100)
-
-        digest = file_sha256(destination)
+        digest = file_sha256(temp_destination)
         if digest != expected_sha256:
-            destination.unlink(missing_ok=True)
+            temp_destination.unlink(missing_ok=True)
             raise RuntimeError(
                 f"Checksum mismatch for {destination.name}: expected {expected_sha256}, got {digest}. "
                 "The corrupt file was removed. Start the launcher again to retry the download."
             )
+
+        temp_destination.replace(destination)
+        self.ui.set_progress(100)
+        return True
 
     def download_root(self) -> Path:
         return self.install_root / "downloads"

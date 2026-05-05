@@ -119,7 +119,7 @@ def test_checksum_mismatch_reports_expected_and_actual(monkeypatch: pytest.Monke
     monkeypatch.setattr(app, "file_sha256", lambda _path: "actual")
 
     with pytest.raises(RuntimeError, match="expected expected, got actual"):
-        launcher._download_file("https://example.test/asset.zip", destination, "expected", 3)
+        launcher._download_file("https://example.test/asset.zip", destination, "expected", 2)
 
     assert not destination.exists()
 
@@ -155,6 +155,81 @@ def test_download_file_reuses_valid_cached_asset(
 
     assert progress_values == [100]
     assert destination.read_bytes() == b"ok"
+
+
+def test_download_file_retries_eof_and_resumes_partial_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    destination = tmp_path / "asset.zip"
+    expected_payload = b"abcd"
+    expected_sha = app.hashlib.sha256(expected_payload).hexdigest()
+    progress_values: list[int] = []
+    seen_ranges: list[str | None] = []
+    launcher = app.BootstrapLauncher(
+        SimpleNamespace(set_progress=progress_values.append),
+        app.ReleaseManifest(
+            version="1.0",
+            tag="v1.0",
+            repo_owner="owner",
+            repo_name="repo",
+            required_disk_space_bytes=1,
+            runtime_entry_relative_path="runtime/WhisperTurboDesktop.exe",
+            ffmpeg_relative_path="tools/ffmpeg/bin/ffmpeg.exe",
+            runtime_bundle=app.ReleaseBundle("runtime.zip", "unused", 0, []),
+            ffmpeg_bundle=app.ReleaseBundle("ffmpeg.zip", "unused", 0, []),
+        ),
+    )
+
+    class FirstResponse:
+        headers = {"Content-Length": "4"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self, _size: int) -> bytes:
+            if not hasattr(self, "_sent"):
+                self._sent = True
+                return b"ab"
+            raise OSError("unexpected eof while reading")
+
+    class ResumeResponse:
+        headers = {"Content-Length": "2"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def getcode(self) -> int:
+            return 206
+
+        def read(self, _size: int) -> bytes:
+            if not hasattr(self, "_sent"):
+                self._sent = True
+                return b"cd"
+            return b""
+
+    def fake_urlopen(request, timeout: int = 0):
+        seen_ranges.append(getattr(request, "headers", {}).get("Range"))
+        if len(seen_ranges) == 1:
+            return FirstResponse()
+        return ResumeResponse()
+
+    monkeypatch.setattr(app.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(app, "DOWNLOAD_RETRY_BACKOFF_SECONDS", (0, 0, 0), raising=False)
+
+    launcher._download_file(
+        "https://example.test/asset.zip", destination, expected_sha, len(expected_payload)
+    )
+
+    assert destination.read_bytes() == expected_payload
+    assert not destination.with_name("asset.zip.download").exists()
+    assert seen_ranges == [None, "bytes=2-"]
+    assert progress_values[-1] == 100
 
 
 def test_main_launches_ready_install_without_showing_bootstrap_ui(

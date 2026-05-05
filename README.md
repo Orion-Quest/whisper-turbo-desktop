@@ -72,6 +72,7 @@ The runtime ZIP, runtime `.part###` files, `ffmpeg` ZIP, manifest, and checksums
 - History view with separated time/status/file fields and double-click open for output file or folder
 - Output preview for `txt`, `srt`, `vtt`, `json`, and `tsv`
 - Runtime checks for managed `ffmpeg`, `whisper`, `torch`, `CUDA`, and model cache state
+- Interrupted bootstrap downloads retry automatically and resume from the saved `.download` partial file when GitHub, TLS, proxy, or VPN connections drop mid-transfer
 
 ## How Downloads Work
 
@@ -85,6 +86,8 @@ The installed bootstrap launcher downloads:
 into the local application install directory.
 
 If the launcher is run directly from a download folder, the runtime is installed under `%LOCALAPPDATA%\Programs\WhisperTurboDesktop` instead of beside the downloaded `.exe`. Completed downloads are cached and reused after size/hash validation; incomplete downloads are written as temporary `.download` files and are only promoted after the transfer finishes.
+
+If a GitHub release download is interrupted by a TLS EOF, remote disconnect, proxy/VPN reset, or timeout, the bootstrap launcher retries automatically. A partial `.download` file is kept under the app's `downloads` cache and the next attempt resumes with an HTTP `Range` request instead of starting from zero when the server supports it.
 
 ### First Transcription
 
