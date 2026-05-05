@@ -13,7 +13,7 @@ dependencies = [
   "openai-whisper>=20250625",
 ]
 
-[project.scripts]
+[project.gui-scripts]
 whisper-turbo-desktop = "whisper_turbo_desktop.app:main"
 
 [tool.setuptools]

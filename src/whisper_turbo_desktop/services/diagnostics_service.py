@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import QThread, Signal
 
+from whisper_turbo_common.subprocess_utils import hidden_subprocess_kwargs
 from whisper_turbo_desktop import __version__
 from whisper_turbo_desktop.utils.runtime import (
     is_model_cached,
@@ -126,6 +127,7 @@ class DiagnosticsService:
                 encoding="utf-8",
                 errors="replace",
                 check=False,
+                **hidden_subprocess_kwargs(),
             )
         except FileNotFoundError as exc:
             return DiagnosticItem(name=name, ok=False, details=str(exc))

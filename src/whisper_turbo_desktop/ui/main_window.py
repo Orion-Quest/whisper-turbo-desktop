@@ -7,6 +7,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QTimer, Qt
 from PySide6.QtGui import (
@@ -51,12 +52,14 @@ from whisper_turbo_desktop.models.transcription import SUPPORTED_MODELS, Transcr
 from whisper_turbo_desktop.services.diagnostics_service import DiagnosticItem, DiagnosticsService, DiagnosticsWorker
 from whisper_turbo_desktop.services.history_service import HistoryService
 from whisper_turbo_desktop.services.settings_service import AppSettings, SettingsService
-from whisper_turbo_desktop.services.whisper_runner import (
-    TranscriptionFailure,
-    TranscriptionResult,
-    TranscriptionWorker,
-)
 from whisper_turbo_desktop.utils.runtime import install_root_dir, local_whisper_cache_dir
+
+if TYPE_CHECKING:
+    from whisper_turbo_desktop.services.whisper_runner import (
+        TranscriptionFailure,
+        TranscriptionResult,
+        TranscriptionWorker,
+    )
 
 OUTPUT_LANGUAGE_TO_TASK = {
     "Original": "transcribe",
@@ -784,7 +787,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._load_settings()
         self._wire_signals()
-        self.refresh_diagnostics()
+        self.diagnostics_text.setPlainText("Diagnostics not run yet. Click Refresh Diagnostics.")
         self._render_queue()
         self._render_history()
         self._update_task_note()
@@ -1455,6 +1458,8 @@ class MainWindow(QMainWindow):
         )
 
     def _launch_request(self, request: TranscriptionRequest, *, origin: str, queue_task_id: str | None = None) -> None:
+        from whisper_turbo_desktop.services.whisper_runner import TranscriptionWorker
+
         self.current_run_origin = origin
         self.current_queue_task_id = queue_task_id
         self._set_running_state(True)

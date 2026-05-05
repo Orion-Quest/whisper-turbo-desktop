@@ -155,3 +155,189 @@ def test_download_file_reuses_valid_cached_asset(
 
     assert progress_values == [100]
     assert destination.read_bytes() == b"ok"
+
+
+def test_main_launches_ready_install_without_showing_bootstrap_ui(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    install_root = tmp_path / "install"
+    runtime_exe = install_root / "runtime" / "WhisperTurboDesktop.exe"
+    ffmpeg_exe = install_root / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe"
+    runtime_exe.parent.mkdir(parents=True)
+    ffmpeg_exe.parent.mkdir(parents=True)
+    runtime_exe.write_bytes(b"runtime")
+    ffmpeg_exe.write_bytes(b"ffmpeg")
+
+    manifest = app.ReleaseManifest(
+        version="1.0",
+        tag="v1.0",
+        repo_owner="owner",
+        repo_name="repo",
+        required_disk_space_bytes=1,
+        runtime_entry_relative_path="runtime/WhisperTurboDesktop.exe",
+        ffmpeg_relative_path="tools/ffmpeg/bin/ffmpeg.exe",
+        runtime_bundle=app.ReleaseBundle("runtime.zip", "runtime-sha", 1, []),
+        ffmpeg_bundle=app.ReleaseBundle("ffmpeg.zip", "ffmpeg-sha", 1, []),
+    )
+    (install_root / "installed_manifest.json").write_text(
+        '{"version":"1.0","runtime_archive":"runtime.zip","ffmpeg_archive":"ffmpeg.zip"}',
+        encoding="utf-8",
+    )
+    launched: list[Path] = []
+
+    def fail_bootstrap_ui():
+        raise AssertionError("ready installs must launch without showing bootstrap UI")
+
+    monkeypatch.setattr(app, "install_root_dir", lambda: install_root)
+    monkeypatch.setattr(app, "manifest_path", lambda: tmp_path / "release-manifest.json")
+    monkeypatch.setattr(app.ReleaseManifest, "load", staticmethod(lambda _path: manifest))
+    monkeypatch.setattr(app, "BootstrapUI", fail_bootstrap_ui)
+    monkeypatch.setattr(
+        app.BootstrapLauncher,
+        "_launch_runtime",
+        lambda self: launched.append(self.runtime_exe),
+    )
+
+    assert app.main([]) == 0
+
+    assert launched == [runtime_exe]
+
+
+def test_launch_runtime_hides_windows_console(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    install_root = tmp_path / "install"
+    runtime_root = install_root / "runtime"
+    runtime_exe = runtime_root / "WhisperTurboDesktop.exe"
+    runtime_root.mkdir(parents=True)
+    runtime_exe.write_bytes(b"runtime")
+    manifest = app.ReleaseManifest(
+        version="1.0",
+        tag="v1.0",
+        repo_owner="owner",
+        repo_name="repo",
+        required_disk_space_bytes=1,
+        runtime_entry_relative_path="runtime/WhisperTurboDesktop.exe",
+        ffmpeg_relative_path="tools/ffmpeg/bin/ffmpeg.exe",
+        runtime_bundle=app.ReleaseBundle("runtime.zip", "runtime-sha", 1, []),
+        ffmpeg_bundle=app.ReleaseBundle("ffmpeg.zip", "ffmpeg-sha", 1, []),
+    )
+    captured: dict[str, object] = {}
+    launcher = app.BootstrapLauncher(SimpleNamespace(), manifest)
+    launcher.install_root = install_root
+    launcher.runtime_root = runtime_root
+    launcher.runtime_exe = runtime_exe
+
+    def fake_popen(command: list[str], **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(app, "hidden_subprocess_kwargs", lambda: {"creationflags": 123})
+    monkeypatch.setattr(app.subprocess, "Popen", fake_popen)
+
+    launcher._launch_runtime()
+
+    assert captured == {
+        "command": [str(runtime_exe)],
+        "kwargs": {"cwd": str(runtime_root), "creationflags": 123},
+    }
+
+
+def test_current_install_ready_rejects_wrong_ffmpeg_size(tmp_path: Path) -> None:
+    install_root = tmp_path / "install"
+    runtime_exe = install_root / "runtime" / "WhisperTurboDesktop.exe"
+    ffmpeg_exe = install_root / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe"
+    runtime_exe.parent.mkdir(parents=True)
+    ffmpeg_exe.parent.mkdir(parents=True)
+    runtime_exe.write_bytes(b"runtime")
+    ffmpeg_exe.write_bytes(b"tiny")
+    (install_root / "installed_manifest.json").write_text(
+        '{"version":"1.0","runtime_archive":"runtime.zip","ffmpeg_archive":"ffmpeg.zip"}',
+        encoding="utf-8",
+    )
+    manifest = app.ReleaseManifest(
+        version="1.0",
+        tag="v1.0",
+        repo_owner="owner",
+        repo_name="repo",
+        required_disk_space_bytes=1,
+        runtime_entry_relative_path="runtime/WhisperTurboDesktop.exe",
+        ffmpeg_relative_path="tools/ffmpeg/bin/ffmpeg.exe",
+        runtime_bundle=app.ReleaseBundle("runtime.zip", "runtime-sha", 1, []),
+        ffmpeg_bundle=app.ReleaseBundle("ffmpeg.zip", "ffmpeg-sha", 1, []),
+        ffmpeg_executable_size=10,
+    )
+    launcher = app.BootstrapLauncher(SimpleNamespace(), manifest)
+    launcher.install_root = install_root
+    launcher.runtime_exe = runtime_exe
+    launcher.ffmpeg_exe = ffmpeg_exe
+    launcher.installed_manifest = install_root / "installed_manifest.json"
+
+    assert launcher._is_current_install_ready() is False
+
+
+def test_verify_ffmpeg_executable_runs_extracted_binary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ffmpeg_exe = tmp_path / "ffmpeg.exe"
+    ffmpeg_exe.write_bytes(b"real-binary")
+    expected_sha = app.file_sha256(ffmpeg_exe)
+    manifest = app.ReleaseManifest(
+        version="1.0",
+        tag="v1.0",
+        repo_owner="owner",
+        repo_name="repo",
+        required_disk_space_bytes=1,
+        runtime_entry_relative_path="runtime/WhisperTurboDesktop.exe",
+        ffmpeg_relative_path="tools/ffmpeg/bin/ffmpeg.exe",
+        runtime_bundle=app.ReleaseBundle("runtime.zip", "runtime-sha", 1, []),
+        ffmpeg_bundle=app.ReleaseBundle("ffmpeg.zip", "ffmpeg-sha", 1, []),
+        ffmpeg_executable_sha256=expected_sha,
+        ffmpeg_executable_size=ffmpeg_exe.stat().st_size,
+        ffmpeg_executable_version="8.1-full_build",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return type(
+            "Completed",
+            (),
+            {
+                "returncode": 0,
+                "stdout": "ffmpeg version 8.1-full_build Copyright\n",
+                "stderr": "",
+            },
+        )()
+
+    monkeypatch.setattr(app.subprocess, "run", fake_run)
+    monkeypatch.setattr(app, "hidden_subprocess_kwargs", lambda: {"creationflags": 123})
+    launcher = app.BootstrapLauncher(SimpleNamespace(), manifest)
+
+    launcher._verify_ffmpeg_executable(ffmpeg_exe)
+
+    assert captured["command"] == [str(ffmpeg_exe), "-version"]
+    assert captured["kwargs"]["creationflags"] == 123
+
+
+def test_verify_ffmpeg_executable_rejects_wrong_checksum(tmp_path: Path) -> None:
+    ffmpeg_exe = tmp_path / "ffmpeg.exe"
+    ffmpeg_exe.write_bytes(b"real-binary")
+    manifest = app.ReleaseManifest(
+        version="1.0",
+        tag="v1.0",
+        repo_owner="owner",
+        repo_name="repo",
+        required_disk_space_bytes=1,
+        runtime_entry_relative_path="runtime/WhisperTurboDesktop.exe",
+        ffmpeg_relative_path="tools/ffmpeg/bin/ffmpeg.exe",
+        runtime_bundle=app.ReleaseBundle("runtime.zip", "runtime-sha", 1, []),
+        ffmpeg_bundle=app.ReleaseBundle("ffmpeg.zip", "ffmpeg-sha", 1, []),
+        ffmpeg_executable_sha256="wrong",
+    )
+    launcher = app.BootstrapLauncher(SimpleNamespace(), manifest)
+
+    with pytest.raises(RuntimeError, match="ffmpeg executable checksum mismatch"):
+        launcher._verify_ffmpeg_executable(ffmpeg_exe)

@@ -10,8 +10,9 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Protocol, Sequence
 
+from whisper_turbo_common.subprocess_utils import hidden_subprocess_kwargs
 from whisper_turbo_bootstrap.runtime import configure_bootstrap_runtime
 
 configure_bootstrap_runtime()
@@ -87,6 +88,9 @@ class ReleaseManifest:
     ffmpeg_relative_path: str
     runtime_bundle: ReleaseBundle
     ffmpeg_bundle: ReleaseBundle
+    ffmpeg_executable_sha256: str | None = None
+    ffmpeg_executable_size: int | None = None
+    ffmpeg_executable_version: str | None = None
 
     @classmethod
     def load(cls, path: Path) -> "ReleaseManifest":
@@ -117,6 +121,9 @@ class ReleaseManifest:
             ffmpeg_relative_path=payload["ffmpeg_relative_path"],
             runtime_bundle=build_bundle(payload["runtime_bundle"]),
             ffmpeg_bundle=build_bundle(payload["ffmpeg_bundle"]),
+            ffmpeg_executable_sha256=payload.get("ffmpeg_executable_sha256"),
+            ffmpeg_executable_size=payload.get("ffmpeg_executable_size"),
+            ffmpeg_executable_version=payload.get("ffmpeg_executable_version"),
         )
 
     def asset_url(self, asset_name: str) -> str:
@@ -160,25 +167,59 @@ class BootstrapUI:
         self.root.destroy()
 
 
+class BootstrapStatusSink(Protocol):
+    def set_status(self, text: str) -> None:
+        ...
+
+    def set_detail(self, text: str) -> None:
+        ...
+
+    def set_progress(self, value: int) -> None:
+        ...
+
+    def close(self) -> None:
+        ...
+
+
+class NullBootstrapUI:
+    def set_status(self, _text: str) -> None:
+        return
+
+    def set_detail(self, _text: str) -> None:
+        return
+
+    def set_progress(self, _value: int) -> None:
+        return
+
+    def close(self) -> None:
+        return
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if "--self-test" in args:
         return _release_self_test()
 
-    ui = BootstrapUI()
+    ui: BootstrapStatusSink | None = None
     try:
         manifest = ReleaseManifest.load(manifest_path())
-        launcher = BootstrapLauncher(ui, manifest)
+        launcher = BootstrapLauncher(NullBootstrapUI(), manifest)
+        if launcher.launch_if_current_install_ready():
+            return 0
+
+        ui = BootstrapUI()
+        launcher.ui = ui
         launcher.run()
         return 0
     except Exception as exc:
-        ui.close()
+        if ui is not None:
+            ui.close()
         messagebox.showerror(APP_NAME, str(exc))
         return 1
 
 
 class BootstrapLauncher:
-    def __init__(self, ui: BootstrapUI, manifest: ReleaseManifest) -> None:
+    def __init__(self, ui: BootstrapStatusSink, manifest: ReleaseManifest) -> None:
         self.ui = ui
         self.manifest = manifest
         self.install_root = install_root_dir()
@@ -186,6 +227,13 @@ class BootstrapLauncher:
         self.runtime_exe = self.install_root / manifest.runtime_entry_relative_path
         self.ffmpeg_exe = self.install_root / manifest.ffmpeg_relative_path
         self.installed_manifest = self.install_root / "installed_manifest.json"
+
+    def launch_if_current_install_ready(self) -> bool:
+        if not self._is_current_install_ready():
+            return False
+        self._launch_runtime()
+        self.ui.close()
+        return True
 
     def run(self) -> None:
         self.ui.set_status("Checking local installation...")
@@ -214,6 +262,11 @@ class BootstrapLauncher:
 
     def _is_current_install_ready(self) -> bool:
         if not self.runtime_exe.exists() or not self.ffmpeg_exe.exists() or not self.installed_manifest.exists():
+            return False
+        if (
+            self.manifest.ffmpeg_executable_size is not None
+            and self.ffmpeg_exe.stat().st_size != self.manifest.ffmpeg_executable_size
+        ):
             return False
 
         try:
@@ -356,9 +409,61 @@ class BootstrapLauncher:
         if staging.exists():
             shutil.rmtree(staging)
         shutil.move(str(source_root), str(staging))
+        self._verify_ffmpeg_executable(staging / self._ffmpeg_path_relative_to_tools())
         if tools_root.exists():
             shutil.rmtree(tools_root)
         staging.rename(tools_root)
+
+    def _ffmpeg_path_relative_to_tools(self) -> Path:
+        relative_path = Path(self.manifest.ffmpeg_relative_path)
+        try:
+            return relative_path.relative_to("tools")
+        except ValueError as exc:
+            raise RuntimeError(
+                f"ffmpeg relative path must be under tools/: {relative_path}"
+            ) from exc
+
+    def _verify_ffmpeg_executable(self, ffmpeg_path: Path) -> None:
+        if not ffmpeg_path.exists():
+            raise RuntimeError(f"ffmpeg executable not found after extraction: {ffmpeg_path}")
+        if (
+            self.manifest.ffmpeg_executable_size is not None
+            and ffmpeg_path.stat().st_size != self.manifest.ffmpeg_executable_size
+        ):
+            raise RuntimeError(
+                f"ffmpeg executable size mismatch: expected "
+                f"{self.manifest.ffmpeg_executable_size}, got {ffmpeg_path.stat().st_size}"
+            )
+        if self.manifest.ffmpeg_executable_sha256 is not None:
+            digest = file_sha256(ffmpeg_path)
+            if digest != self.manifest.ffmpeg_executable_sha256:
+                raise RuntimeError(
+                    f"ffmpeg executable checksum mismatch: expected "
+                    f"{self.manifest.ffmpeg_executable_sha256}, got {digest}"
+                )
+
+        try:
+            completed = subprocess.run(
+                [str(ffmpeg_path), "-version"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=15,
+                **hidden_subprocess_kwargs(),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise RuntimeError(f"ffmpeg executable failed to start: {ffmpeg_path}\n{exc}") from exc
+
+        first_line = ((completed.stdout or completed.stderr).splitlines() or [""])[0]
+        expected_version = self.manifest.ffmpeg_executable_version
+        if completed.returncode != 0 or not first_line.startswith("ffmpeg version "):
+            raise RuntimeError(f"ffmpeg executable is not runnable: {first_line or ffmpeg_path}")
+        if expected_version and f"ffmpeg version {expected_version}" not in first_line:
+            raise RuntimeError(
+                f"ffmpeg executable version mismatch: expected {expected_version}, got {first_line}"
+            )
 
     def _extract_archive(self, archive_path: Path, destination: Path) -> None:
         with zipfile.ZipFile(archive_path, "r") as archive:
@@ -382,7 +487,11 @@ class BootstrapLauncher:
     def _launch_runtime(self) -> None:
         if not self.runtime_exe.exists():
             raise RuntimeError(f"Runtime executable not found: {self.runtime_exe}")
-        subprocess.Popen([str(self.runtime_exe)], cwd=str(self.runtime_root))
+        subprocess.Popen(
+            [str(self.runtime_exe)],
+            cwd=str(self.runtime_root),
+            **hidden_subprocess_kwargs(),
+        )
 
 
 def install_root_dir() -> Path:

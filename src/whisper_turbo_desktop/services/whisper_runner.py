@@ -6,10 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import torch
-import whisper
 from PySide6.QtCore import QThread, Signal
-from whisper.utils import get_writer
 
 from whisper_turbo_desktop.models.transcription import TranscriptionRequest
 from whisper_turbo_desktop.services.translation_service import (
@@ -17,6 +14,7 @@ from whisper_turbo_desktop.services.translation_service import (
     SubtitleSegment,
 )
 from whisper_turbo_desktop.utils.runtime import is_model_cached, local_whisper_cache_dir, resolve_model_source
+from whisper_turbo_common.subprocess_utils import hide_whisper_audio_subprocess_window
 
 
 class TranscriptionCancelled(RuntimeError):
@@ -93,14 +91,20 @@ class TranscriptionWorker(QThread):
     def run(self) -> None:
         started_at = time.monotonic()
         self._emit_progress(0)
-
-        transcribe_module = importlib.import_module("whisper.transcribe")
-        original_tqdm = transcribe_module.tqdm.tqdm
-        original_whisper_tqdm = whisper.tqdm
+        whisper_module: Any | None = None
+        transcribe_module: Any | None = None
+        original_tqdm: Any | None = None
+        original_whisper_tqdm: Any | None = None
         ProgressBridge.progress_callback = self._emit_whisper_progress
         ProgressBridge.cancel_callback = lambda: self._cancel_requested
 
         try:
+            whisper_module = importlib.import_module("whisper")
+            transcribe_module = importlib.import_module("whisper.transcribe")
+            whisper_utils_module = importlib.import_module("whisper.utils")
+            original_tqdm = transcribe_module.tqdm.tqdm
+            original_whisper_tqdm = whisper_module.tqdm
+
             self.request.validate()
             self._emit_progress(3)
             self.request.output_dir.mkdir(parents=True, exist_ok=True)
@@ -124,8 +128,8 @@ class TranscriptionWorker(QThread):
                     "Turbo can translate to English, but medium or large-v3 is usually more reliable for translation quality."
                 )
 
-            whisper.tqdm = WhisperProgressBar
-            model = whisper.load_model(model_source, device=device)
+            whisper_module.tqdm = WhisperProgressBar
+            model = whisper_module.load_model(model_source, device=device)
             self._emit_progress(12)
 
             self.state_changed.emit("Running Whisper...")
@@ -141,7 +145,10 @@ class TranscriptionWorker(QThread):
 
             self.state_changed.emit("Writing output files...")
             self._emit_progress(72 if self.request.translation_enabled else 94)
-            writer = get_writer(self.request.output_format, str(self.request.output_dir))
+            writer = whisper_utils_module.get_writer(
+                self.request.output_format,
+                str(self.request.output_dir),
+            )
             writer(result, str(self.request.input_path))
 
             self._write_translated_outputs(result, model=model, device=device)
@@ -179,8 +186,10 @@ class TranscriptionWorker(QThread):
                 )
             )
         finally:
-            transcribe_module.tqdm.tqdm = original_tqdm
-            whisper.tqdm = original_whisper_tqdm
+            if transcribe_module is not None and original_tqdm is not None:
+                transcribe_module.tqdm.tqdm = original_tqdm
+            if whisper_module is not None and original_whisper_tqdm is not None:
+                whisper_module.tqdm = original_whisper_tqdm
             ProgressBridge.progress_callback = None
             ProgressBridge.cancel_callback = None
 
@@ -200,18 +209,21 @@ class TranscriptionWorker(QThread):
         self._emit_progress(mapped_value)
 
     def _resolve_device(self) -> str:
+        import torch
+
         if self.request.device == "auto":
             return "cuda" if torch.cuda.is_available() else "cpu"
         return self.request.device
 
     def _transcribe_audio(self, model: Any, *, task: str, device: str) -> dict[str, Any]:
-        return model.transcribe(
-            str(self.request.input_path),
-            task=task,
-            language=self.request.language,
-            verbose=False,
-            fp16=device == "cuda",
-        )
+        with hide_whisper_audio_subprocess_window():
+            return model.transcribe(
+                str(self.request.input_path),
+                task=task,
+                language=self.request.language,
+                verbose=False,
+                fp16=device == "cuda",
+            )
 
     def _write_translated_outputs(
         self, result: dict[str, Any], *, model: Any, device: str

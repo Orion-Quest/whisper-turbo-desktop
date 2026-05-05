@@ -1,12 +1,38 @@
 from __future__ import annotations
 
+import sys
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import whisper_turbo_desktop.services.whisper_runner as whisper_runner
 from whisper_turbo_desktop.models.transcription import TranscriptionRequest
 from whisper_turbo_desktop.services.whisper_runner import TranscriptionWorker
+
+
+def patch_worker_runtime(monkeypatch, fake_model, fake_writer, *, cuda_available: bool = False) -> None:
+    fake_whisper = SimpleNamespace(tqdm=object(), load_model=lambda *args, **kwargs: fake_model)
+    fake_transcribe = SimpleNamespace(tqdm=SimpleNamespace(tqdm=object()))
+    fake_utils = SimpleNamespace(get_writer=lambda _format, _dir: fake_writer)
+
+    def fake_import_module(name: str):
+        if name == "whisper":
+            return fake_whisper
+        if name == "whisper.transcribe":
+            return fake_transcribe
+        if name == "whisper.utils":
+            return fake_utils
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(whisper_runner.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(whisper_runner, "hide_whisper_audio_subprocess_window", lambda: nullcontext())
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: cuda_available)),
+    )
 
 
 def test_translation_pipeline_writes_translated_subtitles(
@@ -60,12 +86,7 @@ def test_translation_pipeline_writes_translated_subtitles(
                 },
             )()
 
-    monkeypatch.setattr(
-        whisper_runner, "get_writer", lambda _format, _dir: FakeWriter()
-    )
-    monkeypatch.setattr(
-        whisper_runner.whisper, "load_model", lambda *args, **kwargs: FakeModel()
-    )
+    patch_worker_runtime(monkeypatch, FakeModel(), FakeWriter())
     monkeypatch.setattr(
         whisper_runner,
         "SubtitleTranslationService",
@@ -74,7 +95,6 @@ def test_translation_pipeline_writes_translated_subtitles(
     monkeypatch.setattr(whisper_runner, "resolve_model_source", lambda model: model)
     monkeypatch.setattr(whisper_runner, "is_model_cached", lambda _model: True)
     monkeypatch.setattr(whisper_runner, "local_whisper_cache_dir", lambda: tmp_path)
-    monkeypatch.setattr(whisper_runner.torch.cuda, "is_available", lambda: False)
 
     request = TranscriptionRequest(
         input_path=input_path,
@@ -145,15 +165,9 @@ def test_worker_maps_whisper_progress_before_write_and_completion(
                 encoding="utf-8",
             )
 
-    monkeypatch.setattr(
-        whisper_runner, "get_writer", lambda _format, _dir: FakeWriter()
-    )
-    monkeypatch.setattr(
-        whisper_runner.whisper, "load_model", lambda *args, **kwargs: FakeModel()
-    )
+    patch_worker_runtime(monkeypatch, FakeModel(), FakeWriter())
     monkeypatch.setattr(whisper_runner, "resolve_model_source", lambda model: model)
     monkeypatch.setattr(whisper_runner, "is_model_cached", lambda _model: True)
-    monkeypatch.setattr(whisper_runner.torch.cuda, "is_available", lambda: False)
 
     request = TranscriptionRequest(
         input_path=input_path,
@@ -248,12 +262,7 @@ def test_translation_pipeline_uses_source_transcript_for_sidecar_translation_whe
                 },
             )()
 
-    monkeypatch.setattr(
-        whisper_runner, "get_writer", lambda _format, _dir: FakeWriter()
-    )
-    monkeypatch.setattr(
-        whisper_runner.whisper, "load_model", lambda *args, **kwargs: FakeModel()
-    )
+    patch_worker_runtime(monkeypatch, FakeModel(), FakeWriter())
     monkeypatch.setattr(
         whisper_runner,
         "SubtitleTranslationService",
@@ -262,7 +271,6 @@ def test_translation_pipeline_uses_source_transcript_for_sidecar_translation_whe
     monkeypatch.setattr(whisper_runner, "resolve_model_source", lambda model: model)
     monkeypatch.setattr(whisper_runner, "is_model_cached", lambda _model: True)
     monkeypatch.setattr(whisper_runner, "local_whisper_cache_dir", lambda: tmp_path)
-    monkeypatch.setattr(whisper_runner.torch.cuda, "is_available", lambda: False)
 
     request = TranscriptionRequest(
         input_path=input_path,
@@ -336,12 +344,7 @@ def test_worker_reports_separate_api_translation_progress_stage(
                 },
             )()
 
-    monkeypatch.setattr(
-        whisper_runner, "get_writer", lambda _format, _dir: FakeWriter()
-    )
-    monkeypatch.setattr(
-        whisper_runner.whisper, "load_model", lambda *args, **kwargs: FakeModel()
-    )
+    patch_worker_runtime(monkeypatch, FakeModel(), FakeWriter())
     monkeypatch.setattr(
         whisper_runner,
         "SubtitleTranslationService",
@@ -349,7 +352,6 @@ def test_worker_reports_separate_api_translation_progress_stage(
     )
     monkeypatch.setattr(whisper_runner, "resolve_model_source", lambda model: model)
     monkeypatch.setattr(whisper_runner, "is_model_cached", lambda _model: True)
-    monkeypatch.setattr(whisper_runner.torch.cuda, "is_available", lambda: False)
 
     request = TranscriptionRequest(
         input_path=input_path,

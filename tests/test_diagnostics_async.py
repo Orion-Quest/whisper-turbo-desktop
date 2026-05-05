@@ -58,7 +58,7 @@ def _wait_until(predicate, timeout_seconds: float = 2.0) -> None:
         time.sleep(0.01)
 
 
-def test_main_window_refreshes_diagnostics_asynchronously(monkeypatch, qapp) -> None:
+def test_main_window_defers_diagnostics_until_user_refresh(monkeypatch, qapp) -> None:
     release_event = threading.Event()
     blocking_service = BlockingDiagnosticsService(release_event)
 
@@ -70,11 +70,17 @@ def test_main_window_refreshes_diagnostics_asynchronously(monkeypatch, qapp) -> 
     elapsed = time.perf_counter() - started_at
 
     assert elapsed < 0.2
-    assert window.diagnostics_worker is not None
-    assert window.diagnostics_worker.isRunning()
-    assert "Running diagnostics" in window.diagnostics_text.toPlainText()
+    assert window.diagnostics_worker is None
+    assert blocking_service.calls == 0
+    assert "Refresh Diagnostics" in window.diagnostics_text.toPlainText()
 
     try:
+        window.refresh_diagnostics()
+
+        assert window.diagnostics_worker is not None
+        assert window.diagnostics_worker.isRunning()
+        assert "Running diagnostics" in window.diagnostics_text.toPlainText()
+
         _wait_until(lambda: blocking_service.calls == 1)
         release_event.set()
         _wait_until(lambda: "[OK] Python" in window.diagnostics_text.toPlainText())
@@ -122,3 +128,23 @@ def test_frozen_diagnostics_do_not_launch_runtime_executable(monkeypatch) -> Non
     assert "Whisper" in names
     assert "Torch/CUDA" in names
     assert all(command[0] != runtime_executable for command in calls)
+
+
+def test_diagnostics_subprocess_checks_hide_windows_console(monkeypatch) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_run(_command: list[str], **kwargs):
+        captured_kwargs.update(kwargs)
+        return type("Completed", (), {"returncode": 0, "stdout": "ok", "stderr": ""})()
+
+    monkeypatch.setattr(diagnostics_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        diagnostics_module,
+        "hidden_subprocess_kwargs",
+        lambda: {"creationflags": 123},
+    )
+
+    result = DiagnosticsService()._run(["ffmpeg", "-version"], "FFmpeg")
+
+    assert result.ok is True
+    assert captured_kwargs["creationflags"] == 123
