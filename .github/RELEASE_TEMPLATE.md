@@ -43,13 +43,16 @@ Windows desktop app for local Whisper transcription, Whisper English translation
 - Improved desktop layout, selectable glass themes, and gradient progress feedback
 - Added clearer output-folder affordance, history rows, and translation setup status
 - Hardened bootstrap download caching, checksum validation, and direct-download install paths
+- Fixed Windows packages built from Scoop `ffmpeg` installs so the managed payload contains the real `ffmpeg.exe`, not a shim
+- Faster normal startup: ready installs launch directly without showing the bootstrap window, diagnostics run only when refreshed, and Whisper/Torch load when transcription starts
+- Hidden Windows child-process consoles for launcher, diagnostics, and Whisper's internal ffmpeg decode step
 - Improved API subtitle translation with strict JSON handling, transient network retries, target-script validation, low-confidence ASR guidance, and retries for obvious literal or phonetic bad model output
 - The first transcription may still require network access if the Whisper model is not cached
 
 ### Checksums
 
 ```text
-<paste SHA256SUMS here>
+{{SHA256SUMS}}
 ```
 
 ### Known Issues

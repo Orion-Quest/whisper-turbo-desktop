@@ -29,15 +29,39 @@ function Resolve-GitHubRepo {
 
 function Resolve-FfmpegPath {
     if ($env:WTD_FFMPEG_PATH -and (Test-Path $env:WTD_FFMPEG_PATH)) {
-        return (Resolve-Path $env:WTD_FFMPEG_PATH).Path
+        return Resolve-FfmpegExecutablePath $env:WTD_FFMPEG_PATH
     }
 
     $command = Get-Command ffmpeg -ErrorAction SilentlyContinue
     if ($null -ne $command -and (Test-Path $command.Source)) {
-        return (Resolve-Path $command.Source).Path
+        return Resolve-FfmpegExecutablePath $command.Source
     }
 
     throw "ffmpeg.exe not found. Install ffmpeg or set WTD_FFMPEG_PATH."
+}
+
+function Resolve-FfmpegExecutablePath([string]$candidatePath) {
+    $resolvedPath = (Resolve-Path $candidatePath).Path
+    $shimPath = [System.IO.Path]::ChangeExtension($resolvedPath, ".shim")
+    if (Test-Path $shimPath) {
+        $shimContent = Get-Content -Path $shimPath -Raw
+        if ($shimContent -match '(?m)^\s*path\s*=\s*"(?<target>[^"]+)"\s*$') {
+            $shimTarget = [Environment]::ExpandEnvironmentVariables($Matches.target)
+            if (-not (Test-Path $shimTarget)) {
+                throw "ffmpeg shim target does not exist: $shimTarget"
+            }
+            $resolvedPath = (Resolve-Path $shimTarget).Path
+        } else {
+            throw "Cannot resolve ffmpeg shim target from: $shimPath"
+        }
+    }
+
+    $versionOutput = & $resolvedPath -version 2>&1 | Select-Object -First 1
+    if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch '^ffmpeg version ') {
+        throw "Resolved ffmpeg path is not a runnable ffmpeg binary: $resolvedPath"
+    }
+
+    return $resolvedPath
 }
 
 function Resolve-CondaTkDllPath([string]$pythonPath, [string]$dllName) {
@@ -140,6 +164,9 @@ if ($ffmpegVersion -match '^ffmpeg version (?<ver>\S+)') {
 } else {
     $ffmpegVersionValue = "unknown"
 }
+$ffmpegExecutableItem = Get-Item $ffmpegPath
+$ffmpegExecutableSize = [int64]$ffmpegExecutableItem.Length
+$ffmpegExecutableSha256 = (Get-FileHash $ffmpegPath -Algorithm SHA256).Hash.ToLower()
 $ffmpegVersionSafe = ($ffmpegVersionValue -replace '[^A-Za-z0-9._-]', '_')
 $ffmpegArchiveName = "ffmpeg-windows-x64-$ffmpegVersionSafe.zip"
 $ffmpegArchivePath = Join-Path $releaseRoot $ffmpegArchiveName
@@ -162,6 +189,58 @@ with tempfile.TemporaryDirectory(prefix="wtd-ffmpeg-") as tmp:
                 archive.write(item, item.relative_to(tmp_root))
 "@
 Invoke-PythonScript $ffmpegZipScript
+
+Write-Host "Verifying ffmpeg archive..."
+$verifyFfmpegZipScript = @"
+from pathlib import Path
+import hashlib
+import subprocess
+import tempfile
+import zipfile
+
+archive_path = Path(r"$ffmpegArchivePath")
+expected_size = int("$ffmpegExecutableSize")
+expected_sha256 = "$ffmpegExecutableSha256"
+expected_version = "$ffmpegVersionValue"
+minimum_real_binary_size = 10 * 1024 * 1024
+
+def sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fp:
+        for chunk in iter(lambda: fp.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+with tempfile.TemporaryDirectory(prefix="wtd-verify-ffmpeg-") as tmp:
+    extract_root = Path(tmp)
+    with zipfile.ZipFile(archive_path, "r") as archive:
+        archive.extractall(extract_root)
+    ffmpeg_exe = extract_root / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe"
+    if not ffmpeg_exe.exists():
+        raise SystemExit(f"ffmpeg archive is missing expected executable: {ffmpeg_exe}")
+    actual_size = ffmpeg_exe.stat().st_size
+    if actual_size < minimum_real_binary_size:
+        raise SystemExit(f"ffmpeg archive contains an implausibly small executable: {actual_size} bytes")
+    if actual_size != expected_size:
+        raise SystemExit(f"ffmpeg executable size mismatch: expected {expected_size}, got {actual_size}")
+    actual_sha256 = sha256(ffmpeg_exe)
+    if actual_sha256 != expected_sha256:
+        raise SystemExit(f"ffmpeg executable checksum mismatch: expected {expected_sha256}, got {actual_sha256}")
+    completed = subprocess.run(
+        [str(ffmpeg_exe), "-version"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    first_line = (completed.stdout or completed.stderr).splitlines()[0] if (completed.stdout or completed.stderr) else ""
+    if completed.returncode != 0 or not first_line.startswith("ffmpeg version "):
+        raise SystemExit(f"extracted ffmpeg is not runnable: {first_line}")
+    if expected_version and expected_version != "unknown" and f"ffmpeg version {expected_version}" not in first_line:
+        raise SystemExit(f"extracted ffmpeg version mismatch: expected {expected_version}, got {first_line}")
+"@
+Invoke-PythonScript $verifyFfmpegZipScript
 
 Write-Host "Splitting archives for GitHub Releases if needed..."
 $splitThresholdBytes = 1900MB
@@ -254,6 +333,9 @@ $manifestObject = [ordered]@{
     required_disk_space_bytes = $requiredDiskSpaceBytes
     runtime_entry_relative_path = "runtime/WhisperTurboDesktop.exe"
     ffmpeg_relative_path = "tools/ffmpeg/bin/ffmpeg.exe"
+    ffmpeg_executable_sha256 = $ffmpegExecutableSha256
+    ffmpeg_executable_size = $ffmpegExecutableSize
+    ffmpeg_executable_version = $ffmpegVersionValue
     runtime_bundle = $runtimeBundle
     ffmpeg_bundle = $ffmpegBundle
 }
@@ -294,10 +376,25 @@ if ($null -ne $iscc) {
 Write-Host "Generating SHA256SUMS..."
 $hashFile = Join-Path $releaseRoot "SHA256SUMS.txt"
 if (Test-Path $hashFile) { Remove-Item $hashFile -Force }
-Get-ChildItem $releaseRoot -Recurse -File | ForEach-Object {
-    $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
-    $relative = Resolve-Path -Relative $_.FullName
-    Add-Content -Path $hashFile -Value "$hash  $relative"
+$publishAssetPaths = @()
+if (Test-Path $installerOutputDir) {
+    $publishAssetPaths += @(Get-ChildItem $installerOutputDir -File -Filter "*.exe" | ForEach-Object { $_.FullName })
+}
+foreach ($part in @($runtimeBundle.parts)) {
+    $publishAssetPaths += (Join-Path $releaseRoot $part.name)
+}
+foreach ($part in @($ffmpegBundle.parts)) {
+    $publishAssetPaths += (Join-Path $releaseRoot $part.name)
+}
+$publishAssetPaths += $manifestPath
+
+$publishAssetPaths | Sort-Object -Unique | ForEach-Object {
+    if (-not (Test-Path $_)) {
+        throw "Expected release asset not found for checksums: $_"
+    }
+    $asset = Get-Item $_
+    $hash = (Get-FileHash $asset.FullName -Algorithm SHA256).Hash.ToLower()
+    Add-Content -Path $hashFile -Value "$hash  $($asset.Name)"
 }
 
 Write-Host "Release assets ready under: $releaseRoot"

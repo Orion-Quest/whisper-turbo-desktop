@@ -37,9 +37,12 @@ Optional environment overrides:
 - Bundle neither Whisper model nor `ffmpeg` inside the runtime release
 - Download runtime payload and `ffmpeg` on first bootstrap launch
 - Download Whisper model on first real transcription
+- Resolve Scoop `ffmpeg` shims to the real executable before packaging
+- Extract and run the generated `tools/ffmpeg/bin/ffmpeg.exe -version` before accepting release assets
 
 ## Notes
 
 - GitHub Releases remains the single public hosting surface
 - If the runtime ZIP exceeds GitHub single-asset limits, the build script splits it into ordered parts
 - The installer packages only the bootstrap launcher and release manifest
+- `SHA256SUMS.txt` contains only public release asset basenames so it can be verified in a clean download directory
