@@ -30,6 +30,7 @@ Typical output files include `txt`, `srt`, `vtt`, `json`, and `tsv`. Optional AP
 6. Click `Run Current`.
 
 The first launch downloads the packaged runtime and managed `ffmpeg`. The first transcription may also download Whisper's `turbo` model if it is not already cached.
+After the managed runtime is installed, later launches start the desktop app directly without showing the bootstrap download window.
 
 ## Download And Install
 
@@ -53,6 +54,8 @@ The runtime ZIP, runtime `.part###` files, `ffmpeg` ZIP, manifest, and checksums
 - Custom translation API key, endpoint, and model settings
 - Selectable glass/light desktop themes with a gradient progress bar
 - Stage-aware progress display for model loading, Whisper, output writing, and API subtitle translation
+- Faster startup path: bootstrap UI is skipped when the installed runtime is current, diagnostics run on refresh, and Whisper/Torch load only when transcription starts
+- Hidden Windows child-process consoles for launcher, diagnostics, and Whisper's internal `ffmpeg` audio decode step
 - Runtime model download on first use
 - History view with separated time/status/file fields and double-click open for output file or folder
 - Output preview for `txt`, `srt`, `vtt`, `json`, and `tsv`
@@ -197,6 +200,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_windows.ps1
 ```
 
 Generated outputs are placed under `release/`.
+
+The Windows build verifies that the packaged managed `ffmpeg` payload contains a real runnable binary. This matters for Scoop installs because `scoop\shims\ffmpeg.exe` is only a shim; the build resolves the shim target, zips the real executable, extracts the generated ZIP, and runs `tools/ffmpeg/bin/ffmpeg.exe -version` before producing release metadata.
+
+`SHA256SUMS.txt` is generated for public release assets only: the bootstrap installer, runtime archive or parts, managed `ffmpeg` ZIP, and release manifest. It is intended to verify files after users or release automation download those assets into a clean directory.
 
 ## Repository Layout
 
