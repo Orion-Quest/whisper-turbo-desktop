@@ -5,6 +5,11 @@ import sys
 from pathlib import Path
 
 MODEL_CACHE_FILENAMES = {
+    "tiny": "tiny.pt",
+    "base": "base.pt",
+    "small": "small.pt",
+    "medium": "medium.pt",
+    "large-v3": "large-v3.pt",
     "turbo": "large-v3-turbo.pt",
 }
 
@@ -50,7 +55,10 @@ def local_whisper_cache_dir() -> Path:
 
 
 def local_model_cache_path(model_name: str) -> Path:
-    return local_whisper_cache_dir() / MODEL_CACHE_FILENAMES[model_name]
+    filename = MODEL_CACHE_FILENAMES.get(model_name)
+    if filename is None:
+        filename = f"{model_name}.pt"
+    return local_whisper_cache_dir() / filename
 
 
 def is_model_cached(model_name: str) -> bool:

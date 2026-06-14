@@ -119,9 +119,9 @@ class TranscriptionWorker(QThread):
             self.log_line.emit(f"Model source: {model_source}")
             self._emit_progress(6)
 
-            if self.request.model == "turbo" and self.request.task == "translate":
+            if self.request.task == "translate" and self.request.model in frozenset({"tiny", "base", "small", "turbo"}):
                 self.warning_issued.emit(
-                    "Turbo can translate to English, but medium or large-v3 is usually more reliable for translation quality."
+                    f"{self.request.model} can translate to English, but medium or large-v3 is usually more reliable for translation quality."
                 )
 
             whisper.tqdm = WhisperProgressBar

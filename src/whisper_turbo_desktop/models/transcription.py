@@ -8,6 +8,11 @@ SUPPORTED_OUTPUT_FORMATS = {"txt", "srt", "vtt", "json", "all"}
 SUPPORTED_TASKS = {"transcribe", "translate"}
 SUPPORTED_DEVICES = {"auto", "cpu", "cuda"}
 SUPPORTED_MODELS = [
+    "tiny",
+    "base",
+    "small",
+    "medium",
+    "large-v3",
     "turbo",
 ]
 COLLECTABLE_OUTPUT_SUFFIXES = {".txt", ".srt", ".vtt", ".json", ".tsv"}
