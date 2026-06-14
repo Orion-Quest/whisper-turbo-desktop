@@ -14,6 +14,7 @@ from whisper_turbo_desktop.utils.runtime import (
     local_model_cache_path,
     managed_ffmpeg_path,
 )
+from whisper_turbo_desktop.models.transcription import SUPPORTED_MODELS
 
 LOGGER = logging.getLogger("whisper_turbo_desktop.diagnostics")
 
@@ -44,13 +45,14 @@ class DiagnosticsWorker(QThread):
 
 class DiagnosticsService:
     def run(self, python_executable: str) -> list[DiagnosticItem]:
-        return [
+        items: list[DiagnosticItem] = [
             self._check_python(python_executable),
             self._check_ffmpeg(),
             self._check_whisper(python_executable),
             self._check_torch_cuda(python_executable),
-            self._check_model_cache("turbo"),
         ]
+        items.extend(self._check_model_cache())
+        return items
 
     def _check_python(self, python_executable: str) -> DiagnosticItem:
         if is_frozen():
@@ -103,19 +105,27 @@ class DiagnosticsService:
             "Torch/CUDA",
         )
 
-    def _check_model_cache(self, model_name: str) -> DiagnosticItem:
-        cache_path = local_model_cache_path(model_name)
-        if is_model_cached(model_name):
-            return DiagnosticItem(
-                name="Model Cache",
-                ok=True,
-                details=f"{model_name} already cached at {cache_path}",
-            )
-        return DiagnosticItem(
-            name="Model Cache",
-            ok=True,
-            details=f"{model_name} not cached yet; it will be downloaded on first transcription to {cache_path}",
-        )
+    def _check_model_cache(self) -> list[DiagnosticItem]:
+        items: list[DiagnosticItem] = []
+        for model_name in SUPPORTED_MODELS:
+            cache_path = local_model_cache_path(model_name)
+            if is_model_cached(model_name):
+                items.append(
+                    DiagnosticItem(
+                        name=f"Model Cache ({model_name})",
+                        ok=True,
+                        details=f"{model_name} cached at {cache_path}",
+                    )
+                )
+            else:
+                items.append(
+                    DiagnosticItem(
+                        name=f"Model Cache ({model_name})",
+                        ok=True,
+                        details=f"{model_name} not cached yet; will be downloaded on first transcription to {cache_path}",
+                    )
+                )
+        return items
 
     def _run(self, command: list[str], name: str) -> DiagnosticItem:
         try:
